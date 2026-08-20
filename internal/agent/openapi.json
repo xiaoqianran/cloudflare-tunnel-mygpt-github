@@ -1,0 +1,170 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "MyGPT Local Git Workspace",
+    "version": "0.1.0",
+    "description": "Operate real Git repositories cloned on a private Linux server. Repository reads, searches and writes use the server's local filesystem, not the GitHub API. Use these actions instead of built-in GitHub tools whenever possible."
+  },
+  "servers": [{"url": "__SERVER_URL__"}],
+  "security": [{"BearerAuth": []}],
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "opaque"}
+    },
+    "schemas": {
+      "RepoRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {"repo": {"type": "string", "description": "Repository as owner/name"}},
+        "required": ["repo"]
+      },
+      "FileChange": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {"type": "string"},
+          "content": {"type": "string"},
+          "delete": {"type": "boolean", "default": false}
+        },
+        "required": ["path"]
+      }
+    }
+  },
+  "paths": {
+    "/v1/repository/sync": {
+      "post": {
+        "operationId": "syncRepository",
+        "summary": "Clone or fetch a repository into the local server workspace",
+        "description": "Call first when a repository is not local or when fresh remote state is needed. Existing dirty worktrees are fetched without overwriting local edits.",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+          "type": "object", "additionalProperties": false,
+          "properties": {"repo": {"type": "string"}, "ref": {"type": "string", "description": "Optional branch, tag or commit to check out when the worktree is clean"}},
+          "required": ["repo"]
+        }}}},
+        "responses": {"200": {"description": "Repository synchronized"}}
+      }
+    },
+    "/v1/repository/inspect": {
+      "post": {
+        "operationId": "inspectRepository",
+        "summary": "Inspect local Git state and list repository files",
+        "description": "Use this instead of GitHub repository browsing. Paginate with next_cursor until null when the file list is large.",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "repo": {"type": "string"},
+            "path_prefix": {"type": "string"},
+            "cursor": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 5000, "default": 1000}
+          },
+          "required": ["repo"]
+        }}}},
+        "responses": {"200": {"description": "Local repository state and file list"}}
+      }
+    },
+    "/v1/files/read": {
+      "post": {
+        "operationId": "readFiles",
+        "summary": "Read multiple files directly from the local repository",
+        "description": "Fast local filesystem read. Batch related files in one call. Text files return full content; binary files are identified without embedding binary data.",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "repo": {"type": "string"},
+            "paths": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"type": "string"}}
+          },
+          "required": ["repo", "paths"]
+        }}}},
+        "responses": {"200": {"description": "Local file contents"}}
+      }
+    },
+    "/v1/repository/search": {
+      "post": {
+        "operationId": "searchRepository",
+        "summary": "Search repository contents locally",
+        "description": "Uses ripgrep when available and never uses GitHub code search. Prefer this for finding symbols, strings and implementation locations.",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "repo": {"type": "string"},
+            "query": {"type": "string"},
+            "path_prefix": {"type": "string"},
+            "regex": {"type": "boolean", "default": false},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}
+          },
+          "required": ["repo", "query"]
+        }}}},
+        "responses": {"200": {"description": "Search matches"}}
+      }
+    },
+    "/v1/repository/page": {
+      "post": {
+        "operationId": "readRepositoryPage",
+        "summary": "Walk the complete text repository under a response budget",
+        "description": "For whole-repository analysis, repeatedly call this action with next_cursor until next_cursor is null. It reads local files only and can continue inside a large file.",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "repo": {"type": "string"},
+            "path_prefix": {"type": "string"},
+            "cursor": {"type": "string"},
+            "max_chars": {"type": "integer", "minimum": 10000, "maximum": 180000, "default": 180000},
+            "max_files": {"type": "integer", "minimum": 1, "maximum": 100, "default": 40}
+          },
+          "required": ["repo"]
+        }}}},
+        "responses": {"200": {"description": "Repository page and next cursor"}}
+      }
+    },
+    "/v1/files/apply": {
+      "post": {
+        "operationId": "applyChanges",
+        "summary": "Write or delete files in the local repository",
+        "description": "Changes the real local worktree immediately without using GitHub. Read relevant files first, then use gitDiff to verify edits before committing.",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "repo": {"type": "string"},
+            "changes": {"type": "array", "minItems": 1, "items": {"$ref": "#/components/schemas/FileChange"}}
+          },
+          "required": ["repo", "changes"]
+        }}}},
+        "responses": {"200": {"description": "Local changes applied"}}
+      }
+    },
+    "/v1/git/diff": {
+      "post": {
+        "operationId": "gitDiff",
+        "summary": "Read the local Git diff",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "repo": {"type": "string"},
+            "staged": {"type": "boolean", "default": false},
+            "max_chars": {"type": "integer", "minimum": 1, "maximum": 180000, "default": 180000}
+          },
+          "required": ["repo"]
+        }}}},
+        "responses": {"200": {"description": "Git diff"}}
+      }
+    },
+    "/v1/git/commit-push": {
+      "post": {
+        "operationId": "commitAndPush",
+        "summary": "Commit all local changes and push with native Git",
+        "description": "Uses local git add/commit/push, not the GitHub REST API. The optional force flag maps to git push --force. GitHub repository rules remain authoritative.",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "repo": {"type": "string"},
+            "message": {"type": "string"},
+            "branch": {"type": "string", "description": "Optional branch to switch to or create before committing"},
+            "force": {"type": "boolean", "default": false}
+          },
+          "required": ["repo"]
+        }}}},
+        "responses": {"200": {"description": "Commit and push result"}}
+      }
+    }
+  }
+}
