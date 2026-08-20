@@ -17,7 +17,7 @@ jobs:
         with:
           go-version: '1.23.x'
           cache: true
-      - name: Test, vet, and publish commit status
+      - name: Test, vet, ARM64 build, and publish commit status
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -29,9 +29,10 @@ jobs:
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/$REPO/statuses/$SHA" \
-              -d "{\"state\":\"$state\",\"context\":\"cloudflare-tunnel-mygpt-github/tests\",\"description\":\"Go test and vet\"}" >/dev/null || true
+              -d "{\"state\":\"$state\",\"context\":\"cloudflare-tunnel-mygpt-github/tests\",\"description\":\"Go test, vet and linux/arm64 build\"}" >/dev/null || true
           }
           trap publish_status EXIT
           gofmt -w .
           go test ./... || { state=failure; exit 1; }
           go vet ./... || { state=failure; exit 1; }
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o /tmp/mygpt-github-agent-linux-arm64 ./cmd/mygpt-github-agent || { state=failure; exit 1; }
