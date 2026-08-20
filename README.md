@@ -12,7 +12,7 @@ Cloudflare Tunnel
     │ outbound-only tunnel to the VPS
     ▼
 127.0.0.1:8787
-MyGPT Git Workspace Agent (Go)
+MyGPT Git Workspace Agent (Go, root service)
     │
     ├─ /srv/mygpt/repos/owner/repo/.git
     ├─ local file reads / writes
@@ -38,7 +38,7 @@ The OpenAPI action exposes:
 - `gitDiff` — review the local diff
 - `commitAndPush` — `git add -A`, commit, and native `git push`; optional force push
 
-The service never provides an arbitrary shell endpoint. Git and filesystem operations are first-class API actions scoped to a repository workspace.
+The service process runs as **root with no systemd filesystem sandboxing**. The current HTTP API still exposes repository-scoped first-class operations rather than an arbitrary shell endpoint, but any bug or future endpoint in this service executes with root privileges.
 
 ## Server requirements
 
@@ -70,12 +70,14 @@ The installer:
 
 - runs tests
 - builds a static Go binary
-- creates the `mygpt-agent` system user
-- creates `/srv/mygpt/repos`
+- runs the systemd service as `root:root`
+- creates `/srv/mygpt/repos` as a persistent root-owned workspace
 - creates `/etc/mygpt-github-agent.env`
 - installs and starts a systemd service bound only to `127.0.0.1:8787`
 
 It prints a generated `API_TOKEN` the first time. Save it.
+
+If you are upgrading an older install that used the `mygpt-agent` system user, rerunning `sudo ./scripts/install.sh` replaces the service definition and restarts it as root. The old user can remain unused.
 
 Check locally:
 
@@ -88,6 +90,19 @@ Expected health response:
 
 ```json
 {"ok":true,"service":"cloudflare-tunnel-mygpt-github","version":"0.1.0"}
+```
+
+Confirm root mode:
+
+```bash
+systemctl show mygpt-github-agent -p User -p Group
+```
+
+Expected:
+
+```text
+User=root
+Group=root
 ```
 
 ## 2. Configure Git authentication
@@ -322,10 +337,24 @@ clone / fetch / push -> Git transport -> GitHub (or your optional Git gateway)
 
 This means repository-scale analysis is bounded mainly by VPS disk/CPU, the Tunnel/API response size, and the model context window rather than per-file GitHub API latency.
 
+## Root service mode
+
+The installed systemd service deliberately runs with:
+
+```ini
+User=root
+Group=root
+Environment=HOME=/root
+```
+
+The previous restrictions (`NoNewPrivileges`, `ProtectSystem`, `ProtectHome`, `ReadWritePaths`) are removed. The process therefore has normal root access to the host filesystem and to child processes it starts.
+
+The public API remains authenticated with `API_TOKEN` and the current handlers remain repository-scoped. Because the process itself is root, protect the token and keep the origin bound to `127.0.0.1` behind Cloudflare Tunnel.
+
 ## Operational notes
 
-- The API does not expose `.git` internals or paths outside a repository workspace.
-- `applyChanges` edits local files only; it does not silently commit.
+- The HTTP API currently does not expose an arbitrary shell endpoint.
+- `applyChanges` edits local repository files only; it does not silently commit.
 - `commitAndPush` stages all local changes with `git add -A`.
 - `force: true` intentionally maps to `git push --force`.
 - GitHub branch protection/rulesets still apply to pushes.
