@@ -1,0 +1,21 @@
+[Unit]
+Description=MyGPT Local Git Workspace Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mygpt-agent
+Group=mygpt-agent
+EnvironmentFile=/etc/mygpt-github-agent.env
+ExecStart=/usr/local/bin/mygpt-github-agent
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/mygpt/repos
+
+[Install]
+WantedBy=multi-user.target
