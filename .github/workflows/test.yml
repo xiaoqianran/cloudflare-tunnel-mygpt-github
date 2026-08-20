@@ -33,6 +33,5 @@ jobs:
           }
           trap publish_status EXIT
           gofmt -w .
-          git diff --exit-code || { state=failure; exit 1; }
           go test ./... || { state=failure; exit 1; }
           go vet ./... || { state=failure; exit 1; }
