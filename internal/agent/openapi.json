@@ -170,7 +170,7 @@
       "post": {
         "operationId": "runCommand",
         "summary": "Run a project command inside the repository sandbox",
-        "description": "Runs a shell command as root inside a persistent per-repository OCI container. The real repository is mounted read-write at /workspace, so build outputs and file edits persist. Package installs inside the sandbox persist across calls. The container does not receive host root filesystem, host devices, or the container-engine socket.",
+        "description": "Runs a shell command as root inside a persistent per-repository OCI container. The repository is mounted read-write at /workspace, so outputs and edits persist. Packages installed in the container persist across calls. The container has no host root, devices, or engine socket.",
         "requestBody": {"required": true, "content": {"application/json": {"schema": {
           "type": "object", "additionalProperties": false,
           "properties": {
