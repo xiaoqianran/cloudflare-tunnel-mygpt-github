@@ -45,6 +45,9 @@ jobs:
           gofmt -w .
           post_status "cloudflare-tunnel-mygpt-github/gofmt" success "gofmt completed"
 
+          go test ./... -run '^$' || fail_stage compile "Go packages failed to compile"
+          post_status "cloudflare-tunnel-mygpt-github/compile" success "Go packages compile"
+
           go test ./... || fail_stage go-test "go test failed"
           post_status "cloudflare-tunnel-mygpt-github/go-test" success "go test passed"
 
