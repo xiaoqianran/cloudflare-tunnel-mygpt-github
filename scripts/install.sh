@@ -18,16 +18,14 @@ if ! command -v rg >/dev/null 2>&1; then
 fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SERVICE_USER="mygpt-agent"
 WORKSPACE="/srv/mygpt/repos"
 ENV_FILE="/etc/mygpt-github-agent.env"
 BIN="/usr/local/bin/mygpt-github-agent"
 
-if ! id "$SERVICE_USER" >/dev/null 2>&1; then
-  useradd --system --home /var/lib/mygpt-agent --create-home --shell /usr/sbin/nologin "$SERVICE_USER"
-fi
-
-install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0755 "$WORKSPACE"
+# The service intentionally runs as root. Keep the workspace persistent and
+# root-owned; existing repository contents do not need to be rewritten because
+# root can access them directly.
+install -d -o root -g root -m 0755 "$WORKSPACE"
 
 cd "$ROOT_DIR"
 go test ./...
@@ -66,8 +64,10 @@ fi
 install -o root -g root -m 0644 "$ROOT_DIR/deploy/mygpt-github-agent.service" /etc/systemd/system/mygpt-github-agent.service
 systemctl daemon-reload
 systemctl enable --now mygpt-github-agent
+systemctl restart mygpt-github-agent
 systemctl --no-pager --full status mygpt-github-agent || true
 
 echo
+echo "Agent mode: root (full host privileges)."
 echo "Local health check: curl http://127.0.0.1:8787/health"
 echo "Next: publish http://localhost:8787 through a Cloudflare Tunnel."
