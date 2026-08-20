@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   go-test:
@@ -16,6 +17,22 @@ jobs:
         with:
           go-version: '1.23.x'
           cache: true
-      - run: gofmt -w . && git diff --exit-code
-      - run: go test ./...
-      - run: go vet ./...
+      - name: Test, vet, and publish commit status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          state=success
+          publish_status() {
+            curl -fsS -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPO/statuses/$SHA" \
+              -d "{\"state\":\"$state\",\"context\":\"cloudflare-tunnel-mygpt-github/tests\",\"description\":\"Go test and vet\"}" >/dev/null || true
+          }
+          trap publish_status EXIT
+          gofmt -w .
+          git diff --exit-code || { state=failure; exit 1; }
+          go test ./... || { state=failure; exit 1; }
+          go vet ./... || { state=failure; exit 1; }
