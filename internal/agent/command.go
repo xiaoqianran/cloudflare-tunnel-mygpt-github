@@ -126,7 +126,7 @@ func (s *Server) ensureSandbox(ctx context.Context, repo, repoPath string) (stri
 	return engine, name, nil
 }
 
-type commandResult struct {
+type sandboxCommandResult struct {
 	Repo       string `json:"repo"`
 	Engine     string `json:"engine"`
 	Container  string `json:"container"`
@@ -140,25 +140,25 @@ type commandResult struct {
 	DurationMS int64  `json:"duration_ms"`
 }
 
-func (s *Server) runSandboxCommand(ctx context.Context, repo, command, workdir string, timeoutSeconds int) (commandResult, error) {
+func (s *Server) runSandboxCommand(ctx context.Context, repo, command, workdir string, timeoutSeconds int) (sandboxCommandResult, error) {
 	dir, err := s.ensureRepo(repo)
 	if err != nil {
-		return commandResult{}, err
+		return sandboxCommandResult{}, err
 	}
 	command = strings.TrimSpace(command)
 	if command == "" {
-		return commandResult{}, fmt.Errorf("command is required")
+		return sandboxCommandResult{}, fmt.Errorf("command is required")
 	}
 
 	containerWorkdir := "/workspace"
 	if strings.TrimSpace(workdir) != "" {
 		clean := filepath.Clean(strings.TrimSpace(workdir))
 		if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-			return commandResult{}, fmt.Errorf("workdir must be relative to the repository")
+			return sandboxCommandResult{}, fmt.Errorf("workdir must be relative to the repository")
 		}
 		hostPath := filepath.Join(dir, clean)
 		if rel, err := filepath.Rel(dir, hostPath); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return commandResult{}, fmt.Errorf("workdir escapes repository")
+			return sandboxCommandResult{}, fmt.Errorf("workdir escapes repository")
 		}
 		containerWorkdir = "/workspace/" + filepath.ToSlash(clean)
 	}
@@ -175,7 +175,7 @@ func (s *Server) runSandboxCommand(ctx context.Context, repo, command, workdir s
 
 	engine, container, err := s.ensureSandbox(commandCtx, repo, dir)
 	if err != nil {
-		return commandResult{}, err
+		return sandboxCommandResult{}, err
 	}
 
 	args := []string{"exec", "--workdir", containerWorkdir, container, "/bin/bash", "-lc", command}
@@ -192,13 +192,13 @@ func (s *Server) runSandboxCommand(ctx context.Context, repo, command, workdir s
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else if commandCtx.Err() == nil {
-			return commandResult{}, err
+			return sandboxCommandResult{}, err
 		} else {
 			exitCode = -1
 		}
 	}
 
-	return commandResult{
+	return sandboxCommandResult{
 		Repo:       repo,
 		Engine:     filepath.Base(engine),
 		Container:  container,
