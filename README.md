@@ -63,7 +63,7 @@ The service itself uses only the Go standard library.
 ```bash
 git clone https://github.com/xiaoqianran/cloudflare-tunnel-mygpt-github.git
 cd cloudflare-tunnel-mygpt-github
-sudo ./scripts/install.sh
+bash ./scripts/install.sh
 ```
 
 The installer:
