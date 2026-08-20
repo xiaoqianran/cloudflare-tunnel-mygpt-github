@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "MyGPT Local Git Workspace",
-    "version": "0.1.0",
-    "description": "Operate real Git repositories cloned on a private Linux server. Repository reads, searches and writes use the server's local filesystem, not the GitHub API. Use these actions instead of built-in GitHub tools whenever possible."
+    "version": "0.2.0",
+    "description": "Operate real Git repositories cloned on a private Linux server. Repository reads, searches and writes use the server's local filesystem. Project commands run inside a persistent per-repository OCI sandbox with the repository mounted read-write. Use these actions instead of built-in GitHub tools whenever possible."
   },
   "servers": [{"url": "__SERVER_URL__"}],
   "security": [{"BearerAuth": []}],
@@ -164,6 +164,27 @@
           "required": ["repo"]
         }}}},
         "responses": {"200": {"description": "Commit and push result"}}
+      }
+    },
+    "/v1/command/run": {
+      "post": {
+        "operationId": "runCommand",
+        "summary": "Run a project command inside the repository sandbox",
+        "description": "Runs a shell command as root inside a persistent per-repository OCI container. The real repository is mounted read-write at /workspace, so build outputs and file edits persist. Package installs inside the sandbox persist across calls. The container does not receive host root filesystem, host devices, or the container-engine socket.",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "repo": {"type": "string", "description": "Repository as owner/name; syncRepository must have cloned it first"},
+            "command": {"type": "string", "description": "Shell command to run inside the sandbox, for example: uname -m, apt-get update, npm test, go test ./..., python3 script.py"},
+            "workdir": {"type": "string", "description": "Optional repository-relative working directory"},
+            "timeout_seconds": {"type": "integer", "minimum": 1, "description": "Optional timeout capped by COMMAND_TIMEOUT_SECONDS"}
+          },
+          "required": ["repo", "command"]
+        }}}},
+        "responses": {
+          "200": {"description": "Command completed; inspect exit_code, stdout, stderr, timed_out and truncated"},
+          "409": {"description": "Repository is not local yet"}
+        }
       }
     }
   }
