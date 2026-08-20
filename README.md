@@ -17,17 +17,24 @@ MyGPT Git Workspace Agent (Go, root service)
     ├─ /srv/mygpt/repos/owner/repo/.git
     ├─ local file reads / writes
     ├─ local ripgrep search
-    └─ native git fetch / commit / push
-              │
-              ▼
-            GitHub
+    ├─ native git fetch / commit / push
+    │
+    └─ runCommand
+         │
+         ▼
+      persistent OCI sandbox
+      root inside container
+      /workspace -> real repository (rw)
+         │
+         ├─ apt / bash / python / npm / uv / go / make ...
+         └─ build/test outputs persist in the repository
 ```
 
-After a repository is cloned, **reading, searching and editing repository files no longer uses the GitHub REST API**. GitHub is contacted only for normal Git synchronization such as clone/fetch/push.
+After a repository is cloned, **reading, searching, editing and project command execution no longer uses the GitHub REST API**. GitHub is contacted only for normal Git synchronization such as clone/fetch/push.
 
 ## What MyGPT can do
 
-The OpenAPI action exposes:
+The OpenAPI actions expose:
 
 - `syncRepository` — clone the repository on first use; later fetch and fast-forward a clean worktree
 - `inspectRepository` — inspect local branch/HEAD/dirty state and list local files
@@ -35,10 +42,23 @@ The OpenAPI action exposes:
 - `searchRepository` — local ripgrep search; no GitHub code-search API
 - `readRepositoryPage` — progressively read the complete text repository, including continuation inside large files
 - `applyChanges` — write/delete files in the real local worktree
+- `runCommand` — run shell commands as root inside a persistent per-repository OCI sandbox
 - `gitDiff` — review the local diff
 - `commitAndPush` — `git add -A`, commit, and native `git push`; optional force push
 
-The service process runs as **root with no systemd filesystem sandboxing**. The current HTTP API still exposes repository-scoped first-class operations rather than an arbitrary shell endpoint, but any bug or future endpoint in this service executes with root privileges.
+The systemd API process itself runs as **root**. `runCommand` does **not** execute the requested shell directly on the host: it executes inside a Podman/Docker container. The real repository is the only host workspace mounted into that container at `/workspace`.
+
+## ARM64 / aarch64
+
+ARM servers are supported. The installer builds the Go service natively on the VPS and the CI also cross-builds `linux/arm64`.
+
+The default command image is:
+
+```text
+ubuntu:24.04
+```
+
+It is multi-architecture. Podman/Docker automatically selects the native `linux/arm64` image on an `aarch64` host.
 
 ## Server requirements
 
@@ -53,56 +73,79 @@ Linux VPS
 Git
 ripgrep
 Go 1.23+
+Podman (preferred) or Docker
 cloudflared
 ```
 
-The service itself uses only the Go standard library.
+The Go service itself uses only the standard library.
 
-## 1. Install the agent on the VPS
+## 1. Install / upgrade the agent on the VPS
 
 ```bash
 git clone https://github.com/xiaoqianran/cloudflare-tunnel-mygpt-github.git
 cd cloudflare-tunnel-mygpt-github
-bash ./scripts/install.sh
+sudo ./scripts/install.sh
+```
+
+For an existing checkout:
+
+```bash
+git pull
+sudo ./scripts/install.sh
 ```
 
 The installer:
 
-- runs tests
-- builds a static Go binary
+- detects the host architecture
+- installs `ripgrep` and Podman on Ubuntu when neither Podman nor Docker is available
+- runs Go tests
+- builds the Go binary natively for the current host
 - runs the systemd service as `root:root`
-- creates `/srv/mygpt/repos` as a persistent root-owned workspace
-- creates `/etc/mygpt-github-agent.env`
-- installs and starts a systemd service bound only to `127.0.0.1:8787`
+- creates `/srv/mygpt/repos` as the persistent Git workspace
+- creates/updates `/etc/mygpt-github-agent.env`
+- pulls `ubuntu:24.04` using the native host architecture
+- starts the service on `127.0.0.1:8787`
 
-It prints a generated `API_TOKEN` the first time. Save it.
-
-If you are upgrading an older install that used the `mygpt-agent` system user, rerunning `sudo ./scripts/install.sh` replaces the service definition and restarts it as root. The old user can remain unused.
+It prints a generated `API_TOKEN` on the first install. Save it.
 
 Check locally:
 
 ```bash
 curl http://127.0.0.1:8787/health
-sudo systemctl status mygpt-github-agent
+systemctl status mygpt-github-agent
 ```
 
 Expected health response:
 
 ```json
-{"ok":true,"service":"cloudflare-tunnel-mygpt-github","version":"0.1.0"}
+{"ok":true,"service":"cloudflare-tunnel-mygpt-github","version":"0.2.0"}
 ```
 
-Confirm root mode:
+Confirm service identity and architecture:
 
 ```bash
 systemctl show mygpt-github-agent -p User -p Group
+uname -m
 ```
 
-Expected:
+Typical ARM64 output:
 
 ```text
 User=root
 Group=root
+aarch64
+```
+
+Confirm the new action exists:
+
+```bash
+curl -s http://127.0.0.1:8787/openapi.json | jq -r '.paths | keys[]'
+```
+
+You should now see:
+
+```text
+/v1/command/run
 ```
 
 ## 2. Configure Git authentication
@@ -135,7 +178,7 @@ sudo systemctl restart mygpt-github-agent
 
 ### Optional: route Git through the old Worker bridge
 
-If this VPS itself cannot reach `github.com`, the agent can use any Git Smart HTTP gateway instead:
+If this VPS itself cannot reach `github.com`, the agent can use a Git Smart HTTP gateway instead:
 
 ```dotenv
 GIT_REMOTE_BASE_URL=https://cloudflare-mygpt-github.wangran.workers.dev/git
@@ -144,9 +187,55 @@ GIT_REMOTE_TOKEN=YOUR_GIT_GATEWAY_TOKEN
 GITHUB_TOKEN=
 ```
 
-Then the local repository still lives on the VPS, while only clone/fetch/push traverse the Worker bridge.
+The repository still lives on the VPS. Only clone/fetch/push traverse the Worker bridge.
 
-## 3. Configure Cloudflare Tunnel
+## 3. Configure the command sandbox
+
+Default configuration:
+
+```dotenv
+COMMAND_TIMEOUT_SECONDS=300
+COMMAND_SANDBOX_ENGINE=auto
+COMMAND_SANDBOX_IMAGE=ubuntu:24.04
+MAX_COMMAND_OUTPUT_CHARS=120000
+```
+
+`auto` prefers Podman and falls back to Docker.
+
+Each repository gets one persistent container with a deterministic name such as:
+
+```text
+mygpt-xxxxxxxxxxxxxxxx
+```
+
+The first `runCommand` call creates and starts it. Later calls reuse it, so packages installed inside the container remain installed.
+
+The mount is:
+
+```text
+host:      /srv/mygpt/repos/owner/repo
+container: /workspace
+mode:      read-write
+```
+
+The command container is **not** created with `--privileged`; the host root filesystem, host devices and Podman/Docker socket are not mounted into it.
+
+Example commands inside the sandbox:
+
+```bash
+uname -m
+apt-get update
+apt-get install -y python3 python3-pip git curl
+python3 --version
+npm test
+go test ./...
+make
+bash scripts/test.sh
+```
+
+A command can contain pipes, redirects and multiple shell statements because it is executed by `/bin/bash -lc` **inside the container**.
+
+## 4. Configure Cloudflare Tunnel
 
 The agent intentionally listens only on:
 
@@ -154,7 +243,7 @@ The agent intentionally listens only on:
 127.0.0.1:8787
 ```
 
-Do not open port 8787 to the Internet.
+Do not open port 8787 directly to the Internet.
 
 In the Cloudflare dashboard:
 
@@ -183,17 +272,15 @@ Hostname:  git-agent.your-domain.com
 Service:   http://localhost:8787
 ```
 
-Cloudflare Tunnel is outbound-only from the server, so the VPS does not need a public inbound application port.
-
-For a temporary development test only, you can instead run:
+For a temporary development test only:
 
 ```bash
 cloudflared tunnel --url http://localhost:8787
 ```
 
-and use the generated `trycloudflare.com` URL. The URL is temporary; use a named tunnel plus your own Cloudflare-managed domain for production.
+Use a named tunnel plus your own Cloudflare-managed hostname for production.
 
-## 4. Configure the Custom GPT Action
+## 5. Configure the Custom GPT Action
 
 Open:
 
@@ -211,7 +298,7 @@ Auth type: Bearer
 API key: <API_TOKEN from /etc/mygpt-github-agent.env>
 ```
 
-Do **not** put these values into the GPT:
+Do **not** put these into the GPT:
 
 ```text
 GITHUB_TOKEN
@@ -224,26 +311,28 @@ Only `API_TOKEN` is the GPT-facing credential.
 ## Recommended MyGPT instruction
 
 ```text
-For repository tasks, always use the cloudflare-tunnel-mygpt-github Actions before any built-in GitHub connector, web browsing, or GitHub search.
+For repository tasks, always use cloudflare-tunnel-mygpt-github Actions before any built-in GitHub connector, GitHub search or web browsing.
 
 Workflow:
 1. Call inspectRepository. If the repository is not local, call syncRepository.
-2. Call syncRepository again only when fresh remote state is needed.
+2. Call syncRepository again only when fresh remote state is required.
 3. Use searchRepository and readFiles for targeted investigation.
-4. For whole-repository analysis, repeatedly call readRepositoryPage with next_cursor until next_cursor is null.
-5. Use applyChanges to edit the real local worktree.
-6. Call gitDiff after edits and inspect the result before committing.
-7. Use commitAndPush only after the changes are correct.
-8. Do not use GitHub API/connector tools for repository file reads when these local actions can answer the request.
+4. For whole-repository analysis, repeatedly call readRepositoryPage with next_cursor until null.
+5. Use applyChanges for direct file edits.
+6. Use runCommand for project setup, dependency installation, builds, tests, linters and scripts. Commands execute inside the persistent repository sandbox and /workspace is the real repository.
+7. When a command fails, inspect stdout/stderr, fix the code, and rerun it.
+8. Call gitDiff after edits and tests.
+9. Use commitAndPush only when the result is correct.
+10. Do not use built-in GitHub tools for repository file reads when these local actions can answer the request.
 ```
 
 ## API examples
 
-Set the public tunnel URL and your agent token:
+Set the local or Tunnel URL and token:
 
 ```bash
-export BASE_URL=https://git-agent.your-domain.com
-export API_TOKEN=YOUR_API_TOKEN
+export BASE_URL=http://127.0.0.1:8787
+export API_TOKEN="$(grep '^API_TOKEN=' /etc/mygpt-github-agent.env | cut -d= -f2-)"
 ```
 
 Clone a repository onto the VPS:
@@ -253,6 +342,42 @@ curl -s "$BASE_URL/v1/repository/sync" \
   -H "Authorization: Bearer $API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"repo":"xiaoqianran/cloudflare-tunnel-mygpt-github"}'
+```
+
+Run an ARM/container sanity check:
+
+```bash
+curl -s "$BASE_URL/v1/command/run" \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo":"xiaoqianran/cloudflare-tunnel-mygpt-github",
+    "command":"id; uname -m; pwd"
+  }' | jq
+```
+
+Expected characteristics:
+
+```text
+exit_code: 0
+stdout contains uid=0(root)
+stdout contains aarch64 on ARM64
+stdout contains /workspace
+engine is podman or docker
+```
+
+Install something and verify the container is persistent:
+
+```bash
+curl -s "$BASE_URL/v1/command/run" \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"repo":"xiaoqianran/cloudflare-tunnel-mygpt-github","command":"apt-get update && apt-get install -y jq"}'
+
+curl -s "$BASE_URL/v1/command/run" \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"repo":"xiaoqianran/cloudflare-tunnel-mygpt-github","command":"jq --version"}'
 ```
 
 List local files:
@@ -273,15 +398,6 @@ curl -s "$BASE_URL/v1/repository/search" \
   -d '{"repo":"xiaoqianran/cloudflare-tunnel-mygpt-github","query":"commitAndPush"}'
 ```
 
-Read files locally:
-
-```bash
-curl -s "$BASE_URL/v1/files/read" \
-  -H "Authorization: Bearer $API_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"repo":"xiaoqianran/cloudflare-tunnel-mygpt-github","paths":["README.md","go.mod"]}'
-```
-
 ## Configuration
 
 `/etc/mygpt-github-agent.env`:
@@ -291,69 +407,65 @@ curl -s "$BASE_URL/v1/files/read" \
 | `API_TOKEN` | Custom GPT -> agent Bearer credential | required |
 | `WORKSPACE_ROOT` | Persistent local repository root | `/srv/mygpt/repos` |
 | `LISTEN_ADDR` | Origin HTTP listener | `127.0.0.1:8787` |
-| `ALLOWED_REPOS` | Optional comma-separated repo patterns; empty means all | empty |
+| `ALLOWED_REPOS` | Comma-separated repo patterns; empty means all | empty |
 | `GIT_REMOTE_BASE_URL` | Base URL used by native Git | `https://github.com` |
 | `GIT_REMOTE_USERNAME` | HTTP Basic username for native Git | `x-access-token` |
 | `GITHUB_TOKEN` | Direct GitHub token; server only | empty |
 | `GIT_REMOTE_TOKEN` | Overrides `GITHUB_TOKEN`, useful for a Git gateway | empty |
-| `COMMAND_TIMEOUT_SECONDS` | Git/search timeout | `300` |
+| `COMMAND_TIMEOUT_SECONDS` | Maximum command/Git operation time | `300` |
+| `COMMAND_SANDBOX_ENGINE` | `auto`, `podman`, or `docker` | `auto` |
+| `COMMAND_SANDBOX_IMAGE` | Persistent command-container image | `ubuntu:24.04` |
+| `MAX_COMMAND_OUTPUT_CHARS` | Maximum captured stdout/stderr chars per stream | `180000` |
 | `MAX_READ_FILES` | Max files in one `readFiles` call | `50` |
 | `MAX_PAGE_CHARS` | Max text budget for one repository page | `180000` |
 | `MAX_WRITE_BYTES` | Max bytes written to one file in one action | `5000000` |
 | `MAX_DIFF_CHARS` | Max diff returned in one response | `180000` |
 
-`ALLOWED_REPOS` examples:
-
-```dotenv
-# all repositories
-ALLOWED_REPOS=
-
-# all repos owned by xiaoqianran
-ALLOWED_REPOS=xiaoqianran/*
-
-# explicit repositories
-ALLOWED_REPOS=xiaoqianran/repo-a,xiaoqianran/repo-b
-```
-
 ## Why this avoids the GitHub file-read bottleneck
 
-After `syncRepository` has cloned the project:
+After `syncRepository` has cloned a project:
 
 ```text
 readFiles          -> VPS local disk
 searchRepository   -> VPS local ripgrep
 readRepositoryPage -> VPS local disk
 applyChanges       -> VPS local disk
+runCommand         -> local OCI container + mounted repo
 gitDiff            -> local .git database
 ```
 
 None of those operations consumes GitHub REST API requests.
 
-Only synchronization crosses the network:
+Only synchronization crosses the Git network path:
 
 ```text
-clone / fetch / push -> Git transport -> GitHub (or your optional Git gateway)
+clone / fetch / push -> Git transport -> GitHub (or optional Git gateway)
 ```
 
-This means repository-scale analysis is bounded mainly by VPS disk/CPU, the Tunnel/API response size, and the model context window rather than per-file GitHub API latency.
+## Security boundary
 
-## Root service mode
+There are intentionally two privilege domains:
 
-The installed systemd service deliberately runs with:
+```text
+Host API process
+  root on VPS
 
-```ini
-User=root
-Group=root
-Environment=HOME=/root
+runCommand process
+  root inside OCI container
+  /workspace = selected repository (rw)
+  no host / mount
+  no container-engine socket mount
+  no --privileged
 ```
 
-The previous restrictions (`NoNewPrivileges`, `ProtectSystem`, `ProtectHome`, `ReadWritePaths`) are removed. The process therefore has normal root access to the host filesystem and to child processes it starts.
+This gives the coding agent broad project-level command capability without turning the public API into a direct host-root shell.
 
-The public API remains authenticated with `API_TOKEN` and the current handlers remain repository-scoped. Because the process itself is root, protect the token and keep the origin bound to `127.0.0.1` behind Cloudflare Tunnel.
+Keep `API_TOKEN` secret and keep the origin bound to `127.0.0.1` behind Cloudflare Tunnel.
 
 ## Operational notes
 
-- The HTTP API currently does not expose an arbitrary shell endpoint.
+- `runCommand` requires the repository to be cloned first with `syncRepository`.
+- Each repository gets a persistent command container; installed packages remain until that container is removed.
 - `applyChanges` edits local repository files only; it does not silently commit.
 - `commitAndPush` stages all local changes with `git add -A`.
 - `force: true` intentionally maps to `git push --force`.
