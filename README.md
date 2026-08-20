@@ -84,14 +84,14 @@ The Go service itself uses only the standard library.
 ```bash
 git clone https://github.com/xiaoqianran/cloudflare-tunnel-mygpt-github.git
 cd cloudflare-tunnel-mygpt-github
-sudo ./scripts/install.sh
+sudo bash ./scripts/install.sh
 ```
 
 For an existing checkout:
 
 ```bash
 git pull
-sudo ./scripts/install.sh
+sudo bash ./scripts/install.sh
 ```
 
 The installer:
