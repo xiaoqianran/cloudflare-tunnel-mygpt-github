@@ -1,0 +1,13 @@
+# Local secrets / runtime
+.env
+.env.*
+!.env.example
+
+# Build output
+bin/
+mygpt-github-agent
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
