@@ -9,53 +9,40 @@ import (
 )
 
 type Config struct {
-	Address               string
-	WorkspaceRoot         string
-	APIToken              string
-	AllowedRepos          []string
-	GitRemoteBaseURL      string
-	GitRemoteUsername     string
-	GitRemoteToken        string
-	CommandTimeout        time.Duration
-	RootCommandTimeout    time.Duration
-	MaxCommandOutputChars int
-	MaxReadFiles          int
-	MaxPageChars          int
-	MaxWriteBytes         int64
-	MaxDiffChars          int
+	Address            string
+	WorkspaceRoot      string
+	APIToken           string
+	AllowedRepos       []string
+	GitRemoteBaseURL   string
+	GitRemoteUsername  string
+	GitRemoteToken     string
+	CommandTimeout     time.Duration
+	MaxReadFiles       int
+	MaxPageChars       int
+	MaxWriteBytes      int64
+	MaxDiffChars       int
 }
 
 func LoadConfig() (Config, error) {
 	cfg := Config{
-		Address:               envString("LISTEN_ADDR", "127.0.0.1:8787"),
-		WorkspaceRoot:         envString("WORKSPACE_ROOT", "/srv/mygpt/repos"),
-		APIToken:              strings.TrimSpace(os.Getenv("API_TOKEN")),
-		AllowedRepos:          splitCSV(os.Getenv("ALLOWED_REPOS")),
-		GitRemoteBaseURL:      strings.TrimRight(envString("GIT_REMOTE_BASE_URL", "https://github.com"), "/"),
-		GitRemoteUsername:     envString("GIT_REMOTE_USERNAME", "x-access-token"),
-		GitRemoteToken:        strings.TrimSpace(os.Getenv("GIT_REMOTE_TOKEN")),
-		CommandTimeout:        time.Duration(envInt("COMMAND_TIMEOUT_SECONDS", 300)) * time.Second,
-		RootCommandTimeout:    time.Duration(envInt("ROOT_COMMAND_TIMEOUT_SECONDS", 3600)) * time.Second,
-		MaxCommandOutputChars: envInt("MAX_COMMAND_OUTPUT_CHARS", 180000),
-		MaxReadFiles:          envInt("MAX_READ_FILES", 50),
-		MaxPageChars:          envInt("MAX_PAGE_CHARS", 180000),
-		MaxWriteBytes:         int64(envInt("MAX_WRITE_BYTES", 5_000_000)),
-		MaxDiffChars:          envInt("MAX_DIFF_CHARS", 180000),
+		Address:           envString("LISTEN_ADDR", "127.0.0.1:8787"),
+		WorkspaceRoot:     envString("WORKSPACE_ROOT", "/srv/mygpt/repos"),
+		APIToken:          strings.TrimSpace(os.Getenv("API_TOKEN")),
+		AllowedRepos:      splitCSV(os.Getenv("ALLOWED_REPOS")),
+		GitRemoteBaseURL:  strings.TrimRight(envString("GIT_REMOTE_BASE_URL", "https://github.com"), "/"),
+		GitRemoteUsername: envString("GIT_REMOTE_USERNAME", "x-access-token"),
+		GitRemoteToken:    strings.TrimSpace(os.Getenv("GIT_REMOTE_TOKEN")),
+		CommandTimeout:    time.Duration(envInt("COMMAND_TIMEOUT_SECONDS", 300)) * time.Second,
+		MaxReadFiles:      envInt("MAX_READ_FILES", 50),
+		MaxPageChars:      envInt("MAX_PAGE_CHARS", 180000),
+		MaxWriteBytes:     int64(envInt("MAX_WRITE_BYTES", 5_000_000)),
+		MaxDiffChars:      envInt("MAX_DIFF_CHARS", 180000),
 	}
 	if cfg.GitRemoteToken == "" {
 		cfg.GitRemoteToken = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
 	}
 	if cfg.APIToken == "" {
 		return Config{}, fmt.Errorf("API_TOKEN is required")
-	}
-	if cfg.CommandTimeout <= 0 {
-		cfg.CommandTimeout = 300 * time.Second
-	}
-	if cfg.RootCommandTimeout <= 0 {
-		cfg.RootCommandTimeout = 3600 * time.Second
-	}
-	if cfg.MaxCommandOutputChars < 1000 {
-		cfg.MaxCommandOutputChars = 180000
 	}
 	if cfg.MaxReadFiles < 1 {
 		cfg.MaxReadFiles = 50
