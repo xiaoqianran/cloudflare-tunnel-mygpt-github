@@ -2,9 +2,12 @@ package agent
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -47,6 +50,35 @@ func TestSafeRepoPath(t *testing.T) {
 	}
 }
 
+func TestCommandEndpointIsRegisteredAndAuthenticated(t *testing.T) {
+	s := NewServer(Config{APIToken: "test-token"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/command/run", strings.NewReader(`{"repo":"alice/demo","command":"uname -m"}`))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected authenticated command route, got status %d", rec.Code)
+	}
+}
+
+func TestSandboxContainerNameIsStable(t *testing.T) {
+	a := sandboxContainerName("alice/demo")
+	b := sandboxContainerName("alice/demo")
+	c := sandboxContainerName("alice/other")
+	if a != b || a == c || !strings.HasPrefix(a, "mygpt-") {
+		t.Fatalf("unexpected sandbox names: %q %q %q", a, b, c)
+	}
+}
+
+func TestCappedBuffer(t *testing.T) {
+	buf := &cappedBuffer{limit: 5}
+	if n, err := buf.Write([]byte("abcdefgh")); err != nil || n != 8 {
+		t.Fatalf("unexpected write result: n=%d err=%v", n, err)
+	}
+	if buf.String() != "abcde" || !buf.truncated {
+		t.Fatalf("unexpected capped output: %q truncated=%v", buf.String(), buf.truncated)
+	}
+}
+
 func TestLocalWorkspaceReadWriteAndPage(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
@@ -72,13 +104,16 @@ func TestLocalWorkspaceReadWriteAndPage(t *testing.T) {
 	}
 
 	s := NewServer(Config{
-		WorkspaceRoot:  root,
-		APIToken:       "test-token",
-		CommandTimeout: 10 * time.Second,
-		MaxReadFiles:   50,
-		MaxPageChars:   20_000,
-		MaxWriteBytes:  1_000_000,
-		MaxDiffChars:   20_000,
+		WorkspaceRoot:         root,
+		APIToken:              "test-token",
+		CommandTimeout:        10 * time.Second,
+		CommandEngine:         "auto",
+		CommandImage:          "ubuntu:24.04",
+		MaxCommandOutputChars: 20_000,
+		MaxReadFiles:          50,
+		MaxPageChars:          20_000,
+		MaxWriteBytes:         1_000_000,
+		MaxDiffChars:          20_000,
 	})
 	files, err := s.readFiles(context.Background(), repo, []string{"a.txt"})
 	if err != nil {
