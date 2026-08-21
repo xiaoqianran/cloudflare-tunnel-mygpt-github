@@ -52,7 +52,7 @@ func TestSafeRepoPath(t *testing.T) {
 
 func TestCommandEndpointIsRegisteredAndAuthenticated(t *testing.T) {
 	s := NewServer(Config{APIToken: "test-token"})
-	req := httptest.NewRequest(http.MethodPost, "/v1/command/run", strings.NewReader(`{"repo":"alice/demo","command":"uname -m"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/command/run", strings.NewReader(`{"command":"id"}`))
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
@@ -77,15 +77,6 @@ func TestDecodeJSONRejectsUnknownFieldsAndTrailingValues(t *testing.T) {
 	}
 }
 
-func TestSandboxContainerNameIsStable(t *testing.T) {
-	a := sandboxContainerName("alice/demo")
-	b := sandboxContainerName("alice/demo")
-	c := sandboxContainerName("alice/other")
-	if a != b || a == c || !strings.HasPrefix(a, "mygpt-") {
-		t.Fatalf("unexpected sandbox names: %q %q %q", a, b, c)
-	}
-}
-
 func TestCappedBuffer(t *testing.T) {
 	buf := &cappedBuffer{limit: 5}
 	if n, err := buf.Write([]byte("abcdefgh")); err != nil || n != 8 {
@@ -93,6 +84,21 @@ func TestCappedBuffer(t *testing.T) {
 	}
 	if buf.String() != "abcde" || !buf.truncated {
 		t.Fatalf("unexpected capped output: %q truncated=%v", buf.String(), buf.truncated)
+	}
+}
+
+func TestHostCommandRunsOnHost(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not installed")
+	}
+	root := t.TempDir()
+	s := NewServer(Config{CommandTimeout: 10 * time.Second, MaxCommandOutputChars: 20_000})
+	result, err := s.runHostCommand(context.Background(), "printf host && printf %s \"$PWD\"", root, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExitCode != 0 || result.Stdout != "host"+root {
+		t.Fatalf("unexpected host command result: %#v", result)
 	}
 }
 
@@ -124,8 +130,6 @@ func TestLocalWorkspaceReadWriteAndPage(t *testing.T) {
 		WorkspaceRoot:         root,
 		APIToken:              "test-token",
 		CommandTimeout:        10 * time.Second,
-		CommandEngine:         "auto",
-		CommandImage:          "ubuntu:24.04",
 		MaxCommandOutputChars: 20_000,
 		MaxReadFiles:          50,
 		MaxPageChars:          20_000,

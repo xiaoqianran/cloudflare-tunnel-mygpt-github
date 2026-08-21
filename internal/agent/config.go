@@ -18,8 +18,6 @@ type Config struct {
 	GitRemoteToken        string
 	GitHubToken           string
 	CommandTimeout        time.Duration
-	CommandEngine         string
-	CommandImage          string
 	MaxCommandOutputChars int
 	MaxReadFiles          int
 	MaxPageChars          int
@@ -39,8 +37,6 @@ func LoadConfig() (Config, error) {
 		GitRemoteToken:        strings.TrimSpace(os.Getenv("GIT_REMOTE_TOKEN")),
 		GitHubToken:           githubToken,
 		CommandTimeout:        time.Duration(envInt("COMMAND_TIMEOUT_SECONDS", 300)) * time.Second,
-		CommandEngine:         strings.ToLower(envString("COMMAND_SANDBOX_ENGINE", "auto")),
-		CommandImage:          envString("COMMAND_SANDBOX_IMAGE", "ubuntu:24.04"),
 		MaxCommandOutputChars: envInt("MAX_COMMAND_OUTPUT_CHARS", 180000),
 		MaxReadFiles:          envInt("MAX_READ_FILES", 50),
 		MaxPageChars:          envInt("MAX_PAGE_CHARS", 180000),
@@ -55,12 +51,6 @@ func LoadConfig() (Config, error) {
 	}
 	if cfg.CommandTimeout < time.Second {
 		cfg.CommandTimeout = 300 * time.Second
-	}
-	if cfg.CommandEngine != "auto" && cfg.CommandEngine != "podman" && cfg.CommandEngine != "docker" {
-		return Config{}, fmt.Errorf("COMMAND_SANDBOX_ENGINE must be auto, podman, or docker")
-	}
-	if strings.TrimSpace(cfg.CommandImage) == "" {
-		cfg.CommandImage = "ubuntu:24.04"
 	}
 	if cfg.MaxCommandOutputChars < 1000 {
 		cfg.MaxCommandOutputChars = 180_000

@@ -83,7 +83,7 @@ func TestOpenAPIOperationsAreNonConsequentialAndIncludesCreateRelease(t *testing
 	if err := json.Unmarshal([]byte(openAPISpec), &spec); err != nil {
 		t.Fatal(err)
 	}
-	if spec.Info.Version != "0.2.2" {
+	if spec.Info.Version != "0.2.3" {
 		t.Fatalf("unexpected OpenAPI version: %s", spec.Info.Version)
 	}
 	foundRelease := false
