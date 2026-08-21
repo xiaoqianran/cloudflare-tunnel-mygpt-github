@@ -70,17 +70,19 @@ The Go service itself uses only the standard library.
 
 ## 1. Install / upgrade the agent on the VPS
 
+首次安装：
+
 ```bash
 git clone https://github.com/xiaoqianran/mygpt-cf-tunnel.git
 cd mygpt-cf-tunnel
-sudo bash ./scripts/install.sh
+bash ./scripts/install.sh
 ```
 
-For an existing checkout:
+已有 checkout 升级：
 
 ```bash
 git pull
-sudo bash ./scripts/install.sh
+bash ./scripts/install.sh
 ```
 
 The installer:
@@ -92,6 +94,8 @@ The installer:
 - creates `/srv/mygpt/repos` as the persistent Git workspace
 - creates/updates `/etc/mygpt-github-agent.env`
 - starts the service on `127.0.0.1:8787`
+
+运行安装脚本需要当前 shell 已经是 root；脚本本身不会自动调用 `sudo`。
 
 It prints a generated `API_TOKEN` on the first install. Save it.
 
@@ -141,7 +145,7 @@ You should see:
 Edit:
 
 ```bash
-sudo nano /etc/mygpt-github-agent.env
+nano /etc/mygpt-github-agent.env
 ```
 
 ### Direct GitHub mode
@@ -159,7 +163,7 @@ The token stays only on the VPS. It is injected into Git HTTP authentication thr
 Restart after changes:
 
 ```bash
-sudo systemctl restart mygpt-github-agent
+systemctl restart mygpt-github-agent
 ```
 
 ## 3. Configure command execution
@@ -212,7 +216,7 @@ mygpt-cf-tunnel
 Cloudflare gives an installation command similar to:
 
 ```bash
-sudo cloudflared service install <TUNNEL_TOKEN>
+cloudflared service install <TUNNEL_TOKEN>
 ```
 
 Then add a Published application route:

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
-  echo "Run with sudo: sudo ./scripts/install.sh" >&2
+  echo "Run this script as root: ./scripts/install.sh" >&2
   exit 1
 fi
 
