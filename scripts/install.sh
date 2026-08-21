@@ -15,6 +15,9 @@ done
 
 ARCH="$(uname -m)"
 echo "Detected architecture: $ARCH"
+if ! command -v gh >/dev/null 2>&1; then
+  echo "Warning: GitHub CLI (gh) is not installed; createRelease will return 503 until gh is installed." >&2
+fi
 
 need_apt=0
 if ! command -v rg >/dev/null 2>&1; then

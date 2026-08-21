@@ -36,6 +36,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/files/apply", s.auth(http.HandlerFunc(s.handleApplyChanges)))
 	mux.Handle("POST /v1/git/diff", s.auth(http.HandlerFunc(s.handleGitDiff)))
 	mux.Handle("POST /v1/git/commit-push", s.auth(http.HandlerFunc(s.handleCommitPush)))
+	mux.Handle("POST /v1/github/release", s.auth(http.HandlerFunc(s.handleCreateRelease)))
 	mux.Handle("POST /v1/command/run", s.CommandEndpoint())
 	return requestLogger(mux)
 }
@@ -110,7 +111,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,
 		"service": "cloudflare-tunnel-mygpt-github",
-		"version": "0.2.1",
+		"version": "0.2.2",
 	})
 }
 

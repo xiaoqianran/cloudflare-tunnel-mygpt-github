@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "MyGPT Local Git Workspace",
-    "version": "0.2.1",
+    "version": "0.2.2",
     "description": "Operate real Git repositories cloned on a private Linux server. Repository reads, searches and writes use the server's local filesystem. Project commands run inside a persistent per-repository OCI sandbox with the repository mounted read-write. Use these actions instead of built-in GitHub tools whenever possible."
   },
   "servers": [{"url": "__SERVER_URL__"}],
@@ -172,6 +172,32 @@
           "required": ["repo"]
         }}}},
         "responses": {"200": {"description": "Commit and push result"}}
+      }
+    },
+    "/v1/github/release": {
+      "post": {
+        "operationId": "createRelease",
+        "x-openai-isConsequential": false,
+        "summary": "Create a GitHub Release using host GitHub CLI",
+        "description": "Runs gh release create directly on the VPS host, not inside the repository sandbox. The repository must be allowed by ALLOWED_REPOS. Uses GITHUB_TOKEN as GH_TOKEN when configured, otherwise the host root user gh authentication state.",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "repo": {"type": "string", "description": "Repository as owner/name"},
+            "tag": {"type": "string", "description": "Release tag, for example v0.2.2"},
+            "title": {"type": "string", "maxLength": 256},
+            "notes": {"type": "string", "description": "Release notes in Markdown"},
+            "target": {"type": "string", "description": "Optional branch or commit used when GitHub must create the tag"},
+            "draft": {"type": "boolean", "default": false},
+            "prerelease": {"type": "boolean", "default": false}
+          },
+          "required": ["repo", "tag"]
+        }}}},
+        "responses": {
+          "200": {"description": "GitHub Release created"},
+          "502": {"description": "GitHub CLI failed or GitHub rejected the release"},
+          "503": {"description": "GitHub CLI is not installed on the host"}
+        }
       }
     },
     "/v1/command/run": {

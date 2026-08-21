@@ -45,6 +45,7 @@ The OpenAPI actions expose:
 - `runCommand` — run shell commands as root inside a persistent per-repository OCI sandbox
 - `gitDiff` — review the local diff
 - `commitAndPush` — `git add -A`, commit, and native `git push`; optional force push
+- `createRelease` — run host-side `gh release create` to publish a GitHub Release
 
 The systemd API process itself runs as **root**. `runCommand` does **not** execute the requested shell directly on the host: it executes inside a Podman/Docker container. The real repository is the only host workspace mounted into that container at `/workspace`.
 
@@ -71,6 +72,7 @@ Linux VPS
 1-2 GB swap
 20 GB+ SSD
 Git
+GitHub CLI (`gh`) for `createRelease`
 ripgrep
 Go 1.23+
 Podman (preferred) or Docker
@@ -118,7 +120,7 @@ systemctl status mygpt-github-agent
 Expected health response:
 
 ```json
-{"ok":true,"service":"cloudflare-tunnel-mygpt-github","version":"0.2.1"}
+{"ok":true,"service":"cloudflare-tunnel-mygpt-github","version":"0.2.2"}
 ```
 
 Confirm service identity and architecture:
@@ -142,9 +144,10 @@ Confirm the new action exists:
 curl -s http://127.0.0.1:8787/openapi.json | jq -r '.paths | keys[]'
 ```
 
-You should now see:
+You should now see both host and sandbox actions, including:
 
 ```text
+/v1/github/release
 /v1/command/run
 ```
 
@@ -166,7 +169,7 @@ GIT_REMOTE_USERNAME=x-access-token
 GITHUB_TOKEN=github_pat_xxxxxxxxx
 ```
 
-The token stays only on the VPS. It is injected into Git HTTP authentication through the child process environment and is not written into repository remotes.
+The token stays only on the VPS. It is injected into Git HTTP authentication through the child process environment and is not written into repository remotes. When `createRelease` runs, the same `GITHUB_TOKEN` is exposed to host `gh` as `GH_TOKEN` for that child process only.
 
 For public read-only repositories, clone/fetch can work without a token. Push and private repository access require suitable GitHub credentials.
 
@@ -323,7 +326,8 @@ Workflow:
 7. When a command fails, inspect stdout/stderr, fix the code, and rerun it.
 8. Call gitDiff after edits and tests.
 9. Use commitAndPush only when the result is correct.
-10. Do not use built-in GitHub tools for repository file reads when these local actions can answer the request.
+10. Use createRelease when a GitHub Release should be published; it runs gh on the VPS host, not in the project sandbox.
+11. Do not use built-in GitHub tools for repository file reads when these local actions can answer the request.
 ```
 
 ## API examples
@@ -471,3 +475,37 @@ Keep `API_TOKEN` secret and keep the origin bound to `127.0.0.1` behind Cloudfla
 - `force: true` intentionally maps to `git push --force`.
 - GitHub branch protection/rulesets still apply to pushes.
 - A dirty worktree is never overwritten by `syncRepository`; it fetches remote state but skips checkout/fast-forward until local edits are resolved.
+
+## Host-side GitHub Release action
+
+`createRelease` is intentionally different from `runCommand`: it executes the fixed GitHub CLI command `gh release create` directly on the VPS host. It is **not** a general host shell. The request is still protected by the agent Bearer token and `ALLOWED_REPOS`.
+
+The systemd service runs as root, so verify GitHub CLI availability as root:
+
+```bash
+sudo gh --version
+sudo gh auth status
+```
+
+If `GITHUB_TOKEN` is configured in `/etc/mygpt-github-agent.env`, no interactive `gh auth login` is required; the agent passes it to the `gh` child process as `GH_TOKEN`. Otherwise authenticate the root account once:
+
+```bash
+sudo gh auth login
+```
+
+Create a release through the local API:
+
+```bash
+curl -s http://127.0.0.1:8787/v1/github/release \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo":"xiaoqianran/cloudflare-tunnel-mygpt-github",
+    "tag":"v0.2.2",
+    "title":"v0.2.2",
+    "notes":"Host-side GitHub Release support via gh.",
+    "target":"main"
+  }' | jq
+```
+
+If the tag does not already exist on GitHub, `gh release create` can create it from `target`. If the tag already exists, GitHub uses that tag. `draft` and `prerelease` are optional booleans.

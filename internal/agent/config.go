@@ -16,6 +16,7 @@ type Config struct {
 	GitRemoteBaseURL      string
 	GitRemoteUsername     string
 	GitRemoteToken        string
+	GitHubToken           string
 	CommandTimeout        time.Duration
 	CommandEngine         string
 	CommandImage          string
@@ -27,6 +28,7 @@ type Config struct {
 }
 
 func LoadConfig() (Config, error) {
+	githubToken := strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
 	cfg := Config{
 		Address:               envString("LISTEN_ADDR", "127.0.0.1:8787"),
 		WorkspaceRoot:         envString("WORKSPACE_ROOT", "/srv/mygpt/repos"),
@@ -35,6 +37,7 @@ func LoadConfig() (Config, error) {
 		GitRemoteBaseURL:      strings.TrimRight(envString("GIT_REMOTE_BASE_URL", "https://github.com"), "/"),
 		GitRemoteUsername:     envString("GIT_REMOTE_USERNAME", "x-access-token"),
 		GitRemoteToken:        strings.TrimSpace(os.Getenv("GIT_REMOTE_TOKEN")),
+		GitHubToken:           githubToken,
 		CommandTimeout:        time.Duration(envInt("COMMAND_TIMEOUT_SECONDS", 300)) * time.Second,
 		CommandEngine:         strings.ToLower(envString("COMMAND_SANDBOX_ENGINE", "auto")),
 		CommandImage:          envString("COMMAND_SANDBOX_IMAGE", "ubuntu:24.04"),
@@ -45,7 +48,7 @@ func LoadConfig() (Config, error) {
 		MaxDiffChars:          envInt("MAX_DIFF_CHARS", 180000),
 	}
 	if cfg.GitRemoteToken == "" {
-		cfg.GitRemoteToken = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
+		cfg.GitRemoteToken = githubToken
 	}
 	if cfg.APIToken == "" {
 		return Config{}, fmt.Errorf("API_TOKEN is required")
