@@ -111,7 +111,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,
 		"service": "cloudflare-tunnel-mygpt-github",
-		"version": "0.2.2",
+		"version": "0.2.3",
 	})
 }
 

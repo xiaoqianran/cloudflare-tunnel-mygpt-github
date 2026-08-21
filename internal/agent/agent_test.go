@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -84,6 +85,37 @@ func TestCappedBuffer(t *testing.T) {
 	}
 	if buf.String() != "abcde" || !buf.truncated {
 		t.Fatalf("unexpected capped output: %q truncated=%v", buf.String(), buf.truncated)
+	}
+}
+
+func TestHealthVersionMatchesOpenAPI(t *testing.T) {
+	var spec struct {
+		Info struct {
+			Version string `json:"version"`
+		} `json:"info"`
+	}
+	if err := json.Unmarshal([]byte(openAPISpec), &spec); err != nil {
+		t.Fatal(err)
+	}
+	if spec.Info.Version != "0.2.3" {
+		t.Fatalf("unexpected OpenAPI version: %s", spec.Info.Version)
+	}
+
+	s := NewServer(Config{})
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("health status: %d", rec.Code)
+	}
+	var health struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &health); err != nil {
+		t.Fatal(err)
+	}
+	if health.Version != spec.Info.Version {
+		t.Fatalf("health version %q does not match OpenAPI version %q", health.Version, spec.Info.Version)
 	}
 }
 
