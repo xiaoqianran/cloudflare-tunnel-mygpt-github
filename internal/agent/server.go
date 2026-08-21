@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -79,7 +80,15 @@ func (s *Server) authorizeRepo(raw string) (string, error) {
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, 12<<20)
 	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
+		return fmt.Errorf("invalid JSON body: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("invalid JSON body: multiple JSON values are not allowed")
+		}
 		return fmt.Errorf("invalid JSON body: %w", err)
 	}
 	return nil
@@ -88,6 +97,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }
@@ -100,7 +110,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,
 		"service": "cloudflare-tunnel-mygpt-github",
-		"version": "0.2.0",
+		"version": "0.2.1",
 	})
 }
 
@@ -399,6 +409,12 @@ func (s *Server) handleCommitPush(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
+	branch := strings.TrimSpace(input.Branch)
+	if branch != "" && !validBranchName(branch) {
+		writeError(w, 400, "invalid branch")
+		return
+	}
+
 	unlock := s.locker.Lock(repo)
 	defer unlock()
 	dir, err := s.ensureRepo(repo)
@@ -407,14 +423,21 @@ func (s *Server) handleCommitPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	branch := strings.TrimSpace(input.Branch)
+
+	status, err := s.requireGitOK(ctx, dir, "status", "--porcelain=v1")
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	hasChanges := strings.TrimSpace(status.Stdout) != ""
+	if hasChanges && strings.TrimSpace(input.Message) == "" {
+		writeError(w, 400, "message is required when there are changes to commit")
+		return
+	}
+
 	currentResult, _ := s.git(ctx, dir, "branch", "--show-current")
 	current := strings.TrimSpace(currentResult.Stdout)
 	if branch != "" && branch != current {
-		if !validBranchName(branch) {
-			writeError(w, 400, "invalid branch")
-			return
-		}
 		if checkout, _ := s.git(ctx, dir, "switch", branch); checkout.ExitCode != 0 {
 			if _, err := s.requireGitOK(ctx, dir, "switch", "-c", branch); err != nil {
 				writeError(w, 409, err.Error())
@@ -427,9 +450,11 @@ func (s *Server) handleCommitPush(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "cannot commit-and-push from detached HEAD; specify a branch")
 		return
 	}
-	if _, err := s.requireGitOK(ctx, dir, "add", "-A"); err != nil {
-		writeError(w, 500, err.Error())
-		return
+	if hasChanges {
+		if _, err := s.requireGitOK(ctx, dir, "add", "-A"); err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
 	}
 	check, err := s.git(ctx, dir, "diff", "--cached", "--quiet")
 	if err != nil {
@@ -438,10 +463,6 @@ func (s *Server) handleCommitPush(w http.ResponseWriter, r *http.Request) {
 	}
 	committed := false
 	if check.ExitCode == 1 {
-		if strings.TrimSpace(input.Message) == "" {
-			writeError(w, 400, "message is required when there are changes to commit")
-			return
-		}
 		if _, err := s.requireGitOK(ctx, dir, "commit", "-m", input.Message); err != nil {
 			writeError(w, 409, err.Error())
 			return
@@ -485,6 +506,7 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 	spec := strings.ReplaceAll(openAPISpec, "__SERVER_URL__", origin)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write([]byte(spec))
 }
 

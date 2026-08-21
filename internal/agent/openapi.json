@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "MyGPT Local Git Workspace",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "description": "Operate real Git repositories cloned on a private Linux server. Repository reads, searches and writes use the server's local filesystem. Project commands run inside a persistent per-repository OCI sandbox with the repository mounted read-write. Use these actions instead of built-in GitHub tools whenever possible."
   },
   "servers": [{"url": "__SERVER_URL__"}],

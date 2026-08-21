@@ -118,7 +118,7 @@ systemctl status mygpt-github-agent
 Expected health response:
 
 ```json
-{"ok":true,"service":"cloudflare-tunnel-mygpt-github","version":"0.2.0"}
+{"ok":true,"service":"cloudflare-tunnel-mygpt-github","version":"0.2.1"}
 ```
 
 Confirm service identity and architecture:

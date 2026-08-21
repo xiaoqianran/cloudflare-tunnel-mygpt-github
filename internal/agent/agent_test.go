@@ -60,6 +60,23 @@ func TestCommandEndpointIsRegisteredAndAuthenticated(t *testing.T) {
 	}
 }
 
+func TestDecodeJSONRejectsUnknownFieldsAndTrailingValues(t *testing.T) {
+	tests := []string{
+		`{"repo":"alice/demo","unexpected":true}`,
+		`{"repo":"alice/demo"} {"repo":"bob/demo"}`,
+	}
+	for _, body := range tests {
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		var dst struct {
+			Repo string `json:"repo"`
+		}
+		if err := decodeJSON(rec, req, &dst); err == nil {
+			t.Fatalf("expected invalid JSON body to be rejected: %s", body)
+		}
+	}
+}
+
 func TestSandboxContainerNameIsStable(t *testing.T) {
 	a := sandboxContainerName("alice/demo")
 	b := sandboxContainerName("alice/demo")
@@ -139,5 +156,56 @@ func TestLocalWorkspaceReadWriteAndPage(t *testing.T) {
 	}
 	if next != nil {
 		t.Fatalf("unexpected next cursor: %v", *next)
+	}
+}
+
+func TestCommitPushMissingMessageDoesNotStageChanges(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	repo := "alice/demo"
+	dir := repoDir(root, repo)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"config", "user.name", "Test User"},
+		{"config", "user.email", "test@example.com"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("initial\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "a.txt"}, {"commit", "-qm", "initial"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewServer(Config{WorkspaceRoot: root, APIToken: "test-token", CommandTimeout: 10 * time.Second})
+	req := httptest.NewRequest(http.MethodPost, "/v1/git/commit-push", strings.NewReader(`{"repo":"alice/demo"}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	cmd := exec.Command("git", "diff", "--cached", "--quiet")
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("failed request staged changes unexpectedly: %v", err)
 	}
 }

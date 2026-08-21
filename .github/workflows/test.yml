@@ -49,8 +49,11 @@ jobs:
             exit 1
           }
 
-          gofmt -w .
-          post_status "cloudflare-tunnel-mygpt-github/gofmt" success "gofmt completed"
+          format_output="$(gofmt -l .)"
+          if [ -n "$format_output" ]; then
+            fail_with_output gofmt "$format_output"
+          fi
+          post_status "cloudflare-tunnel-mygpt-github/gofmt" success "gofmt check passed"
 
           compile_output="$(go test ./... -run '^$' 2>&1)" || fail_with_output compile "$compile_output"
           post_status "cloudflare-tunnel-mygpt-github/compile" success "Go packages compile"
