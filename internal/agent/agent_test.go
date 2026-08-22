@@ -151,8 +151,9 @@ func TestHostCommandTimeoutKillsWorkflow(t *testing.T) {
 		t.Skip("bash is not installed")
 	}
 	s := NewServer(Config{CommandTimeout: 5 * time.Second, MaxCommandOutputChars: 20000})
+	workdir := t.TempDir()
 	started := time.Now()
-	result, err := s.runHostCommand(context.Background(), "sleep 10", "", "", 1)
+	result, err := s.runHostCommand(context.Background(), "sleep 10", workdir, "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
