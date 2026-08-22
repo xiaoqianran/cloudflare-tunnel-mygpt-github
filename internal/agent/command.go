@@ -13,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 const commonPath = "/root/.local/bin:/root/.cargo/bin:/root/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
@@ -22,29 +23,35 @@ type cappedBuffer struct {
 	buf       bytes.Buffer
 	limit     int
 	truncated bool
+	onWrite   func()
 }
 
 func (w *cappedBuffer) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	n := len(p)
 	if n == 0 {
 		return 0, nil
 	}
+
+	w.mu.Lock()
 	if len(p) >= w.limit {
 		w.buf.Reset()
 		_, _ = w.buf.Write(p[len(p)-w.limit:])
 		w.truncated = true
-		return n, nil
+	} else {
+		if overflow := w.buf.Len() + len(p) - w.limit; overflow > 0 {
+			b := w.buf.Bytes()
+			copy(b, b[overflow:])
+			w.buf.Truncate(len(b) - overflow)
+			w.truncated = true
+		}
+		_, _ = w.buf.Write(p)
 	}
-	if overflow := w.buf.Len() + len(p) - w.limit; overflow > 0 {
-		b := w.buf.Bytes()
-		copy(b, b[overflow:])
-		w.buf.Truncate(len(b) - overflow)
-		w.truncated = true
+	onWrite := w.onWrite
+	w.mu.Unlock()
+
+	if onWrite != nil {
+		onWrite()
 	}
-	_, _ = w.buf.Write(p)
 	return n, nil
 }
 
@@ -52,6 +59,23 @@ func (w *cappedBuffer) snapshot() (string, bool) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.buf.String(), w.truncated
+}
+
+func (w *cappedBuffer) tail(chars int) (string, bool) {
+	text, truncated := w.snapshot()
+	if chars <= 0 {
+		return text, truncated
+	}
+
+	cut := len(text)
+	for i := 0; i < chars && cut > 0; i++ {
+		_, size := utf8.DecodeLastRuneInString(text[:cut])
+		cut -= size
+	}
+	if cut > 0 {
+		return text[cut:], true
+	}
+	return text, truncated
 }
 
 func (w *cappedBuffer) String() string {

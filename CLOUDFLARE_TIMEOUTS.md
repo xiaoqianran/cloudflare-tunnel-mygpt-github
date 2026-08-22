@@ -37,6 +37,8 @@ POST /v1/command/jobs/{id}/cancel
 
 Use `runCommand` for short commands. Prefer `startCommand` for builds, deploys, installs, model jobs, large exports, or anything that might approach the Cloudflare proxy timeout.
 
+For live observation, `getCommandJob` uses revision-based long polling with a 10-second default and 20-second maximum wait. A request returns sooner whenever stdout, stderr, or job status changes. These waits stay intentionally far below Cloudflare's documented 125-second default Proxy Read Timeout.
+
 ## Other Cloudflare connection limits worth distinguishing
 
 Cloudflare's current connection-limits table lists these Cloudflare-to-origin defaults:

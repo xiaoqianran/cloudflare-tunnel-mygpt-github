@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -197,7 +198,7 @@ func TestAsyncCommandCompletes(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		got, ok := s.getJob(id)
+		got, _, ok := s.getJob(id, 0)
 		if !ok {
 			t.Fatal("job disappeared")
 		}
@@ -227,7 +228,7 @@ func TestAsyncCommandCanBeCancelled(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		got, _ := s.getJob(id)
+		got, _, _ := s.getJob(id, 0)
 		if got.Status == "cancelled" {
 			if got.ExitCode == nil || *got.ExitCode == 0 {
 				t.Fatalf("unexpected cancelled result: %#v", got)
@@ -252,7 +253,7 @@ func TestAsyncCommandExposesLiveOutput(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	seenRunningOutput := false
 	for time.Now().Before(deadline) {
-		job, ok := s.getJob(id)
+		job, _, ok := s.getJob(id, 0)
 		if !ok {
 			t.Fatal("job disappeared")
 		}
@@ -331,4 +332,182 @@ func TestAsyncCommandHTTPFlow(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("job did not complete through HTTP API")
+}
+
+func TestCappedBufferTailPreservesUTF8(t *testing.T) {
+	buf := &cappedBuffer{limit: 100}
+	_, _ = buf.Write([]byte("abc你好🙂"))
+	text, truncated := buf.tail(2)
+	if text != "好🙂" || !truncated {
+		t.Fatalf("unexpected UTF-8 tail: %q truncated=%v", text, truncated)
+	}
+}
+
+func TestCommandJobLongPollBroadcastsChanges(t *testing.T) {
+	s := NewServer(Config{APIToken: "test-token", CommandTimeout: 3 * time.Second, MaxCommandOutputChars: 20000})
+	id, err := s.startJob(commandInput{Command: "sleep 0.2; printf wake; sleep 0.2", Workdir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, _, ok := s.getJob(id, 0)
+	if !ok {
+		t.Fatal("job not found")
+	}
+
+	type response struct {
+		code int
+		job  commandJobView
+	}
+	responses := make(chan response, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			req := httptest.NewRequest(http.MethodGet, "/v1/command/jobs/"+id+"?after="+strconv.FormatUint(initial.Revision, 10)+"&wait_seconds=2", nil)
+			req.Header.Set("Authorization", "Bearer test-token")
+			rec := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rec, req)
+			var job commandJobView
+			_ = json.Unmarshal(rec.Body.Bytes(), &job)
+			responses <- response{code: rec.Code, job: job}
+		}()
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case got := <-responses:
+			if got.code != http.StatusOK || got.job.Revision == initial.Revision || !strings.Contains(got.job.Stdout, "wake") {
+				t.Fatalf("waiter did not observe change: code=%d job=%#v", got.code, got.job)
+			}
+		case <-time.After(1500 * time.Millisecond):
+			t.Fatal("long poll did not wake")
+		}
+	}
+}
+
+func TestCommandJobLongPollDisconnectDoesNotCancelJob(t *testing.T) {
+	s := NewServer(Config{APIToken: "test-token", CommandTimeout: 3 * time.Second, MaxCommandOutputChars: 20000})
+	id, err := s.startJob(commandInput{Command: "sleep 0.3; printf done", Workdir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, _, _ := s.getJob(id, 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/v1/command/jobs/"+id+"?after="+strconv.FormatUint(initial.Revision, 10)+"&wait_seconds=2", nil).WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer test-token")
+	done := make(chan struct{})
+	go func() {
+		s.Handler().ServeHTTP(httptest.NewRecorder(), req)
+		close(done)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled HTTP waiter did not return")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		job, _, _ := s.getJob(id, 0)
+		if job.Status == "completed" {
+			if job.Stdout != "done" {
+				t.Fatalf("unexpected completed job: %#v", job)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("HTTP disconnect cancelled the background job")
+}
+
+func TestCommandJobLongPollHeartbeatAndValidation(t *testing.T) {
+	s := NewServer(Config{APIToken: "test-token", CommandTimeout: 3 * time.Second, MaxCommandOutputChars: 20000})
+	id, err := s.startJob(commandInput{Command: "sleep 2", Workdir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, _, _ := s.getJob(id, 0)
+
+	started := time.Now()
+	req := httptest.NewRequest(http.MethodGet, "/v1/command/jobs/"+id+"?after="+strconv.FormatUint(initial.Revision, 10)+"&wait_seconds=1", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if elapsed := time.Since(started); elapsed < 900*time.Millisecond || elapsed > 1500*time.Millisecond {
+		t.Fatalf("unexpected heartbeat wait: %s", elapsed)
+	}
+	var heartbeat commandJobView
+	if err := json.Unmarshal(rec.Body.Bytes(), &heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	if heartbeat.Status != "running" || heartbeat.Revision != initial.Revision {
+		t.Fatalf("unexpected heartbeat: %#v", heartbeat)
+	}
+
+	for _, query := range []string{"after=bad", "wait_seconds=1", "after=1&wait_seconds=21", "tail_chars=20001"} {
+		req = httptest.NewRequest(http.MethodGet, "/v1/command/jobs/"+id+"?"+query, nil)
+		req.Header.Set("Authorization", "Bearer test-token")
+		rec = httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("query %q: expected 400, got %d body=%s", query, rec.Code, rec.Body.String())
+		}
+	}
+	_, _ = s.cancelJob(id)
+}
+
+func TestCommandJobLongPollOnlyWaitsOnMatchingRevision(t *testing.T) {
+	s := NewServer(Config{APIToken: "test-token", CommandTimeout: 3 * time.Second, MaxCommandOutputChars: 20000})
+	id, err := s.startJob(commandInput{Command: "sleep 2", Workdir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, _, _ := s.getJob(id, 0)
+
+	for _, after := range []uint64{0, current.Revision + 1} {
+		started := time.Now()
+		req := httptest.NewRequest(http.MethodGet, "/v1/command/jobs/"+id+"?after="+strconv.FormatUint(after, 10)+"&wait_seconds=2", nil)
+		req.Header.Set("Authorization", "Bearer test-token")
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+			t.Fatalf("mismatched revision %d waited unexpectedly: %s", after, elapsed)
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("mismatched revision %d: status %d body=%s", after, rec.Code, rec.Body.String())
+		}
+	}
+	_, _ = s.cancelJob(id)
+}
+
+func TestOpenAPIExposesLongPollContract(t *testing.T) {
+	var spec struct {
+		Components struct {
+			Schemas map[string]struct {
+				Properties map[string]any `json:"properties"`
+			} `json:"schemas"`
+		} `json:"components"`
+		Paths map[string]map[string]struct {
+			Parameters []struct {
+				Name string `json:"name"`
+			} `json:"parameters"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal([]byte(openAPISpec), &spec); err != nil {
+		t.Fatal(err)
+	}
+	job := spec.Components.Schemas["CommandJob"]
+	if _, ok := job.Properties["revision"]; !ok {
+		t.Fatal("CommandJob.revision missing from OpenAPI")
+	}
+	params := map[string]bool{}
+	for _, p := range spec.Paths["/v1/command/jobs/{id}"]["get"].Parameters {
+		params[p.Name] = true
+	}
+	for _, name := range []string{"id", "after", "wait_seconds", "tail_chars"} {
+		if !params[name] {
+			t.Fatalf("getCommandJob parameter %q missing from OpenAPI", name)
+		}
+	}
 }

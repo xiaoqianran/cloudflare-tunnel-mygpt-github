@@ -109,7 +109,7 @@ OpenAPI 刻意保持简短。它只描述认证、命令执行的同步/异步�
 
 > Cloudflare 当前超时事实、官方来源与下载快照见 [`CLOUDFLARE_TIMEOUTS.md`](./CLOUDFLARE_TIMEOUTS.md)。默认 Proxy Read Timeout 当前为 **125 秒**，不要使用旧的 100 秒记忆。
 
-短任务使用 `runCommand`。可能持续较久的 build、deploy、install 等任务使用 `startCommand`，它会立即返回 job id；随后用 `getCommandJob` 轮询，必要时用 `cancelCommandJob` 取消。`getCommandJob` 在 `running` 阶段就会返回最新的 rolling `stdout` / `stderr` tail，方便及时发现 Modal、Kaggle、编译或训练任务中的异常；`exit_code` 在任务结束前为 `null`。Job 使用独立 context，不绑定原始 HTTP 请求，因此 Cloudflare 请求超时不会成为任务生命周期。已完成 Job 在内存中保留 24 小时；Agent 重启后会清空。
+短任务使用 `runCommand`。长任务使用 `startCommand`，立即取得 job id。`getCommandJob` 在 `running` 阶段暴露 rolling `stdout` / `stderr` 和单调递增的 `revision`。把上次 revision 作为 `after` 并设置 `wait_seconds=10`，服务端会在日志/状态变化时立即返回，而不是让客户端固定 sleep；完全无变化时才按约 10 秒 heartbeat 返回。长轮询默认只返回最近 12000 个 Unicode 字符，可用 `tail_chars` 调整；普通快照仍返回完整的已保存 rolling output。Job 使用独立 context，观察请求断开不会取消任务；需要停止时显式调用 `cancelCommandJob`。已完成 Job 在内存中保留 24 小时，Agent 重启后会清空。
 
 ## Action 请求
 

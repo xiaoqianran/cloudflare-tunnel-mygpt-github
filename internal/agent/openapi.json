@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Universal VPS Root Shell",
-    "version": "0.5.1",
+    "version": "0.5.2",
     "description": "A single authenticated action exposes the remote VPS root shell. It can use or install software as needed, read/write host files, run programs, manage services, call APIs, and compose arbitrary non-interactive workflows. Named tools are examples, never a capability boundary."
   },
   "servers": [
@@ -90,7 +90,7 @@
           },
           "truncated": {
             "type": "boolean",
-            "description": "True when stdout or stderr exceeded the configured rolling output limit."
+            "description": "True when stored output or the requested tail omits older output."
           },
           "duration_ms": {
             "type": "integer",
@@ -106,12 +106,18 @@
           "finished_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Monotonic job revision. Pass the last seen value as after to wait for the next change."
           }
         },
         "required": [
           "id",
           "status",
           "workdir",
+          "revision",
           "exit_code",
           "stdout",
           "stderr",
@@ -161,7 +167,7 @@
         "operationId": "startCommand",
         "x-openai-isConsequential": false,
         "summary": "Start a long-running root shell workflow",
-        "description": "Starts a root shell workflow independently of the HTTP request and immediately returns a job id. Prefer for work that may approach Cloudflare's documented 125-second default Proxy Read Timeout; poll with getCommandJob.",
+        "description": "Starts a root shell workflow independently of the HTTP request and immediately returns a job id. Prefer for long work; observe it with revision-based getCommandJob long polling.",
         "requestBody": {
           "required": true,
           "content": {
@@ -190,7 +196,7 @@
         "operationId": "getCommandJob",
         "x-openai-isConsequential": false,
         "summary": "Get an asynchronous command job",
-        "description": "Returns a flat job snapshot. While running, stdout/stderr expose the current rolling tail and duration_ms keeps increasing; exit_code remains null until the command finishes.",
+        "description": "Returns a flat job snapshot with live rolling stdout/stderr. For event-driven observation, pass the last revision as after; the request returns immediately on output/status change or after a short wait timeout.",
         "parameters": [
           {
             "name": "id",
@@ -199,11 +205,42 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "Last revision already seen. If it still matches a running job, wait for a change instead of polling immediately.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "wait_seconds",
+            "in": "query",
+            "required": false,
+            "description": "Long-poll wait when after matches. Defaults to 10 seconds when after is supplied; maximum 20 seconds. Zero returns immediately.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            }
+          },
+          {
+            "name": "tail_chars",
+            "in": "query",
+            "required": false,
+            "description": "Return only the newest N Unicode characters from each output stream. Long-poll requests default to 12000; ordinary snapshots return the full stored rolling output.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Current flat job state, including live rolling stdout/stderr.",
+            "description": "Current job snapshot. A matching running revision waits for output/status change or the requested heartbeat timeout.",
             "content": {
               "application/json": {
                 "schema": {
@@ -217,6 +254,9 @@
           },
           "404": {
             "description": "Job not found."
+          },
+          "400": {
+            "description": "Invalid after, wait_seconds, or tail_chars."
           }
         }
       }

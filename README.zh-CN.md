@@ -512,4 +512,4 @@ curl http://127.0.0.1:8787/health
 
 Cloudflare 当前官方文档与本地下载快照见 [`CLOUDFLARE_TIMEOUTS.md`](./CLOUDFLARE_TIMEOUTS.md)。默认 Proxy Read Timeout 当前为 **125 秒**，不要使用旧的 100 秒记忆。
 
-长任务使用 `startCommand` 后，通过 `getCommandJob` 轮询。任务处于 `running` 时也会返回最新 rolling `stdout` / `stderr` tail 和持续增长的 `duration_ms`；`exit_code` 在结束前为 `null`。这样 AI 可以在 Modal、Kaggle、编译、训练等任务尚未结束时及时发现错误或卡住的迹象。
+长任务使用 `startCommand` 后，通过 `getCommandJob` 观察。任务处于 `running` 时会返回最新 rolling `stdout` / `stderr`、持续增长的 `duration_ms` 和单调递增的 `revision`。把上次 revision 作为 `after`，推荐 `wait_seconds=10&tail_chars=12000`：日志或状态变化会立即唤醒请求，不需要固定 `sleep`；完全无变化时才 heartbeat 返回。普通 GET 仍可立即取得完整 rolling snapshot。观察请求断开不会取消后台任务，需要停止时显式调用 `cancelCommandJob`。
