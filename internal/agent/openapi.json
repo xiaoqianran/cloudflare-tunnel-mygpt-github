@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Universal VPS Root Shell",
-    "version": "0.5.0",
+    "version": "0.5.1",
     "description": "A single authenticated action exposes the remote VPS root shell. It can use or install software as needed, read/write host files, run programs, manage services, call APIs, and compose arbitrary non-interactive workflows. Named tools are examples, never a capability boundary."
   },
   "servers": [
@@ -48,6 +48,77 @@
         },
         "required": [
           "command"
+        ]
+      },
+      "CommandJob": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "timed_out"
+            ]
+          },
+          "workdir": {
+            "type": "string"
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Null while running; process exit code after completion."
+          },
+          "stdout": {
+            "type": "string",
+            "description": "Current rolling stdout tail, available while running."
+          },
+          "stderr": {
+            "type": "string",
+            "description": "Current rolling stderr tail, available while running."
+          },
+          "timed_out": {
+            "type": "boolean"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when stdout or stderr exceeded the configured rolling output limit."
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "error": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "workdir",
+          "exit_code",
+          "stdout",
+          "stderr",
+          "timed_out",
+          "truncated",
+          "duration_ms",
+          "started_at"
         ]
       }
     }
@@ -119,7 +190,7 @@
         "operationId": "getCommandJob",
         "x-openai-isConsequential": false,
         "summary": "Get an asynchronous command job",
-        "description": "Returns job status and, once finished, the same command result fields as runCommand.",
+        "description": "Returns a flat job snapshot. While running, stdout/stderr expose the current rolling tail and duration_ms keeps increasing; exit_code remains null until the command finishes.",
         "parameters": [
           {
             "name": "id",
@@ -132,7 +203,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Current job state."
+            "description": "Current flat job state, including live rolling stdout/stderr.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandJob"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid Bearer token."

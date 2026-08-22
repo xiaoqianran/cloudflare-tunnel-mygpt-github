@@ -20,13 +20,31 @@ type commandInput struct {
 }
 
 type commandJob struct {
-	ID         string             `json:"id"`
-	Status     string             `json:"status"`
-	Result     *hostCommandResult `json:"result,omitempty"`
-	Error      string             `json:"error,omitempty"`
-	StartedAt  time.Time          `json:"started_at"`
-	FinishedAt *time.Time         `json:"finished_at,omitempty"`
+	ID         string
+	Status     string
+	Workdir    string
+	Error      string
+	StartedAt  time.Time
+	FinishedAt *time.Time
+	result     *hostCommandResult
+	stdout     *cappedBuffer
+	stderr     *cappedBuffer
 	cancel     context.CancelFunc
+}
+
+type commandJobView struct {
+	ID         string     `json:"id"`
+	Status     string     `json:"status"`
+	Workdir    string     `json:"workdir"`
+	ExitCode   *int       `json:"exit_code"`
+	Stdout     string     `json:"stdout"`
+	Stderr     string     `json:"stderr"`
+	TimedOut   bool       `json:"timed_out"`
+	Truncated  bool       `json:"truncated"`
+	DurationMS int64      `json:"duration_ms"`
+	Error      string     `json:"error,omitempty"`
+	StartedAt  time.Time  `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }
 
 type jobStore struct {
@@ -50,7 +68,19 @@ func (s *Server) startJob(input commandInput) (string, error) {
 		return "", err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	job := &commandJob{ID: id, Status: "running", StartedAt: time.Now().UTC(), cancel: cancel}
+	workdir := strings.TrimSpace(input.Workdir)
+	if workdir == "" {
+		workdir = "/root"
+	}
+	job := &commandJob{
+		ID:        id,
+		Status:    "running",
+		Workdir:   workdir,
+		StartedAt: time.Now().UTC(),
+		stdout:    s.newCappedBuffer(),
+		stderr:    s.newCappedBuffer(),
+		cancel:    cancel,
+	}
 
 	s.jobs.mu.Lock()
 	s.jobs.pruneLocked(job.StartedAt)
@@ -58,7 +88,7 @@ func (s *Server) startJob(input commandInput) (string, error) {
 	s.jobs.mu.Unlock()
 
 	go func() {
-		result, err := s.runHostCommand(ctx, input.Command, input.Workdir, input.Stdin, input.TimeoutSeconds)
+		result, err := s.runHostCommandTo(ctx, input.Command, input.Workdir, input.Stdin, input.TimeoutSeconds, job.stdout, job.stderr)
 		finished := time.Now().UTC()
 
 		s.jobs.mu.Lock()
@@ -70,7 +100,8 @@ func (s *Server) startJob(input commandInput) (string, error) {
 			job.Error = err.Error()
 			return
 		}
-		job.Result = &result
+		job.result = &result
+		job.Workdir = result.Workdir
 		switch {
 		case ctx.Err() == context.Canceled:
 			job.Status = "cancelled"
@@ -91,33 +122,55 @@ func (j *jobStore) pruneLocked(now time.Time) {
 	}
 }
 
-func (s *Server) getJob(id string) (commandJob, bool) {
+func (s *Server) getJob(id string) (commandJobView, bool) {
 	s.jobs.mu.RLock()
-	defer s.jobs.mu.RUnlock()
 	job, ok := s.jobs.jobs[id]
 	if !ok {
-		return commandJob{}, false
+		s.jobs.mu.RUnlock()
+		return commandJobView{}, false
 	}
-	copy := *job
-	copy.cancel = nil
-	return copy, true
+	view := commandJobView{
+		ID:         job.ID,
+		Status:     job.Status,
+		Workdir:    job.Workdir,
+		Error:      job.Error,
+		StartedAt:  job.StartedAt,
+		FinishedAt: job.FinishedAt,
+	}
+	result := job.result
+	stdout := job.stdout
+	stderr := job.stderr
+	s.jobs.mu.RUnlock()
+
+	view.Stdout, view.Truncated = stdout.snapshot()
+	stderrText, stderrTruncated := stderr.snapshot()
+	view.Stderr = stderrText
+	view.Truncated = view.Truncated || stderrTruncated
+	if result != nil {
+		exitCode := result.ExitCode
+		view.ExitCode = &exitCode
+		view.TimedOut = result.TimedOut
+		view.DurationMS = result.DurationMS
+		view.Truncated = view.Truncated || result.Truncated
+	} else {
+		view.DurationMS = time.Since(view.StartedAt).Milliseconds()
+	}
+	return view, true
 }
 
-func (s *Server) cancelJob(id string) (commandJob, bool) {
+func (s *Server) cancelJob(id string) (string, bool) {
 	s.jobs.mu.Lock()
 	job, ok := s.jobs.jobs[id]
 	if !ok {
 		s.jobs.mu.Unlock()
-		return commandJob{}, false
+		return "", false
 	}
 	cancel := job.cancel
-	copy := *job
-	copy.cancel = nil
 	s.jobs.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
-	return copy, true
+	return id, true
 }
 
 func validateCommandInput(input commandInput) string {
@@ -158,10 +211,10 @@ func (s *Server) handleGetCommandJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCancelCommandJob(w http.ResponseWriter, r *http.Request) {
-	job, ok := s.cancelJob(r.PathValue("id"))
+	id, ok := s.cancelJob(r.PathValue("id"))
 	if !ok {
 		writeError(w, http.StatusNotFound, "job not found")
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"id": job.ID})
+	writeJSON(w, http.StatusAccepted, map[string]any{"id": id})
 }

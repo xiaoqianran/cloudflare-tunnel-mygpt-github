@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -17,12 +18,16 @@ import (
 const commonPath = "/root/.local/bin:/root/.cargo/bin:/root/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 
 type cappedBuffer struct {
+	mu        sync.RWMutex
 	buf       bytes.Buffer
 	limit     int
 	truncated bool
 }
 
 func (w *cappedBuffer) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	n := len(p)
 	if n == 0 {
 		return 0, nil
@@ -43,7 +48,16 @@ func (w *cappedBuffer) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-func (w *cappedBuffer) String() string { return w.buf.String() }
+func (w *cappedBuffer) snapshot() (string, bool) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.buf.String(), w.truncated
+}
+
+func (w *cappedBuffer) String() string {
+	text, _ := w.snapshot()
+	return text
+}
 
 type hostCommandResult struct {
 	Workdir    string `json:"workdir"`
@@ -86,6 +100,18 @@ func commandEnv() []string {
 }
 
 func (s *Server) runHostCommand(ctx context.Context, command, workdir, stdin string, timeoutSeconds int) (hostCommandResult, error) {
+	return s.runHostCommandTo(ctx, command, workdir, stdin, timeoutSeconds, nil, nil)
+}
+
+func (s *Server) newCappedBuffer() *cappedBuffer {
+	limit := s.cfg.MaxCommandOutputChars
+	if limit < 1000 {
+		limit = 180000
+	}
+	return &cappedBuffer{limit: limit}
+}
+
+func (s *Server) runHostCommandTo(ctx context.Context, command, workdir, stdin string, timeoutSeconds int, stdout, stderr *cappedBuffer) (hostCommandResult, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return hostCommandResult{}, fmt.Errorf("command is required")
@@ -131,11 +157,11 @@ func (s *Server) runHostCommand(ctx context.Context, command, workdir, stdin str
 	// terminates the whole workflow instead of leaving grandchildren behind.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	stdout := &cappedBuffer{limit: s.cfg.MaxCommandOutputChars}
-	stderr := &cappedBuffer{limit: s.cfg.MaxCommandOutputChars}
-	if stdout.limit < 1000 {
-		stdout.limit = 180000
-		stderr.limit = 180000
+	if stdout == nil {
+		stdout = s.newCappedBuffer()
+	}
+	if stderr == nil {
+		stderr = s.newCappedBuffer()
 	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
@@ -173,13 +199,15 @@ func (s *Server) runHostCommand(ctx context.Context, command, workdir, stdin str
 		exitCode = -1
 	}
 
+	stdoutText, stdoutTruncated := stdout.snapshot()
+	stderrText, stderrTruncated := stderr.snapshot()
 	return hostCommandResult{
 		Workdir:    dir,
 		ExitCode:   exitCode,
-		Stdout:     stdout.String(),
-		Stderr:     stderr.String(),
+		Stdout:     stdoutText,
+		Stderr:     stderrText,
 		TimedOut:   timedOut,
-		Truncated:  stdout.truncated || stderr.truncated,
+		Truncated:  stdoutTruncated || stderrTruncated,
 		DurationMS: duration.Milliseconds(),
 	}, nil
 }

@@ -56,8 +56,9 @@ func TestCappedBuffer(t *testing.T) {
 	if n, err := buf.Write([]byte("abcdefgh")); err != nil || n != 8 {
 		t.Fatalf("unexpected write result: n=%d err=%v", n, err)
 	}
-	if buf.String() != "defgh" || !buf.truncated {
-		t.Fatalf("unexpected capped output: %q truncated=%v", buf.String(), buf.truncated)
+	text, truncated := buf.snapshot()
+	if text != "defgh" || !truncated {
+		t.Fatalf("unexpected capped output: %q truncated=%v", text, truncated)
 	}
 	_, _ = buf.Write([]byte("ij"))
 	if buf.String() != "fghij" {
@@ -201,8 +202,8 @@ func TestAsyncCommandCompletes(t *testing.T) {
 			t.Fatal("job disappeared")
 		}
 		if got.Status == "completed" {
-			if got.Result == nil || got.Result.ExitCode != 0 || got.Result.Stdout != "done" {
-				t.Fatalf("unexpected result: %#v", got.Result)
+			if got.ExitCode == nil || *got.ExitCode != 0 || got.Stdout != "done" {
+				t.Fatalf("unexpected result: %#v", got)
 			}
 			return
 		}
@@ -228,14 +229,51 @@ func TestAsyncCommandCanBeCancelled(t *testing.T) {
 	for time.Now().Before(deadline) {
 		got, _ := s.getJob(id)
 		if got.Status == "cancelled" {
-			if got.Result == nil || got.Result.ExitCode == 0 {
-				t.Fatalf("unexpected cancelled result: %#v", got.Result)
+			if got.ExitCode == nil || *got.ExitCode == 0 {
+				t.Fatalf("unexpected cancelled result: %#v", got)
 			}
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("job was not cancelled")
+}
+
+func TestAsyncCommandExposesLiveOutput(t *testing.T) {
+	s := NewServer(Config{CommandTimeout: 3 * time.Second, MaxCommandOutputChars: 20000})
+	id, err := s.startJob(commandInput{
+		Command: "printf first; sleep 0.2; printf second >&2; sleep 0.2; printf third",
+		Workdir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	seenRunningOutput := false
+	for time.Now().Before(deadline) {
+		job, ok := s.getJob(id)
+		if !ok {
+			t.Fatal("job disappeared")
+		}
+		if job.Status == "running" && strings.Contains(job.Stdout, "first") {
+			seenRunningOutput = true
+			if job.ExitCode != nil {
+				t.Fatalf("running job must not have an exit code: %#v", job)
+			}
+		}
+		if job.Status == "completed" {
+			if !seenRunningOutput {
+				t.Fatal("job completed before live output was observable")
+			}
+			if job.Stdout != "firstthird" || job.Stderr != "second" || job.ExitCode == nil || *job.ExitCode != 0 {
+				t.Fatalf("unexpected completed job: %#v", job)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("job did not complete")
 }
 
 func TestExplicitTimeoutOverridesDefault(t *testing.T) {
@@ -280,7 +318,7 @@ func TestAsyncCommandHTTPFlow(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer test-token")
 		rec = httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
-		var job commandJob
+		var job commandJobView
 		if err := json.Unmarshal(rec.Body.Bytes(), &job); err != nil {
 			t.Fatalf("invalid job response: %s", rec.Body.String())
 		}

@@ -506,8 +506,10 @@ curl http://127.0.0.1:8787/health
 
 **操作系统和 CLI 生态本身就是能力层。**
 
-这也是为什么项目最终只需要一个 `runCommand`。
+这也是为什么项目最终只需要一个 shell 执行原语；短任务同步执行，长任务使用异步 Job。
 
 ## Cloudflare 524 超时事实
 
 Cloudflare 当前官方文档与本地下载快照见 [`CLOUDFLARE_TIMEOUTS.md`](./CLOUDFLARE_TIMEOUTS.md)。默认 Proxy Read Timeout 当前为 **125 秒**，不要使用旧的 100 秒记忆。
+
+长任务使用 `startCommand` 后，通过 `getCommandJob` 轮询。任务处于 `running` 时也会返回最新 rolling `stdout` / `stderr` tail 和持续增长的 `duration_ms`；`exit_code` 在结束前为 `null`。这样 AI 可以在 Modal、Kaggle、编译、训练等任务尚未结束时及时发现错误或卡住的迹象。
