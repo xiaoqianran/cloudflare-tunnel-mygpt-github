@@ -343,16 +343,30 @@ func TestCappedBufferTailPreservesUTF8(t *testing.T) {
 	}
 }
 
+func waitForJobStdout(t *testing.T, s *Server, id, want string) commandJobView {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		job, _, ok := s.getJob(id, 0)
+		if !ok {
+			t.Fatal("job disappeared")
+		}
+		if strings.Contains(job.Stdout, want) {
+			return job
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("job stdout never contained %q", want)
+	return commandJobView{}
+}
+
 func TestCommandJobLongPollBroadcastsChanges(t *testing.T) {
 	s := NewServer(Config{APIToken: "test-token", CommandTimeout: 3 * time.Second, MaxCommandOutputChars: 20000})
-	id, err := s.startJob(commandInput{Command: "sleep 0.2; printf wake; sleep 0.2", Workdir: t.TempDir()})
+	id, err := s.startJob(commandInput{Command: "printf ready; sleep 0.2; printf wake; sleep 0.2", Workdir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial, _, ok := s.getJob(id, 0)
-	if !ok {
-		t.Fatal("job not found")
-	}
+	initial := waitForJobStdout(t, s, id, "ready")
 
 	type response struct {
 		code int
@@ -385,11 +399,11 @@ func TestCommandJobLongPollBroadcastsChanges(t *testing.T) {
 
 func TestCommandJobLongPollDisconnectDoesNotCancelJob(t *testing.T) {
 	s := NewServer(Config{APIToken: "test-token", CommandTimeout: 3 * time.Second, MaxCommandOutputChars: 20000})
-	id, err := s.startJob(commandInput{Command: "sleep 0.3; printf done", Workdir: t.TempDir()})
+	id, err := s.startJob(commandInput{Command: "printf ready; sleep 0.3; printf done", Workdir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial, _, _ := s.getJob(id, 0)
+	initial := waitForJobStdout(t, s, id, "ready")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	req := httptest.NewRequest(http.MethodGet, "/v1/command/jobs/"+id+"?after="+strconv.FormatUint(initial.Revision, 10)+"&wait_seconds=2", nil).WithContext(ctx)
@@ -411,7 +425,7 @@ func TestCommandJobLongPollDisconnectDoesNotCancelJob(t *testing.T) {
 	for time.Now().Before(deadline) {
 		job, _, _ := s.getJob(id, 0)
 		if job.Status == "completed" {
-			if job.Stdout != "done" {
+			if job.Stdout != "readydone" {
 				t.Fatalf("unexpected completed job: %#v", job)
 			}
 			return
@@ -423,11 +437,11 @@ func TestCommandJobLongPollDisconnectDoesNotCancelJob(t *testing.T) {
 
 func TestCommandJobLongPollHeartbeatAndValidation(t *testing.T) {
 	s := NewServer(Config{APIToken: "test-token", CommandTimeout: 3 * time.Second, MaxCommandOutputChars: 20000})
-	id, err := s.startJob(commandInput{Command: "sleep 2", Workdir: t.TempDir()})
+	id, err := s.startJob(commandInput{Command: "printf ready; sleep 2", Workdir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial, _, _ := s.getJob(id, 0)
+	initial := waitForJobStdout(t, s, id, "ready")
 
 	started := time.Now()
 	req := httptest.NewRequest(http.MethodGet, "/v1/command/jobs/"+id+"?after="+strconv.FormatUint(initial.Revision, 10)+"&wait_seconds=1", nil)
@@ -459,11 +473,11 @@ func TestCommandJobLongPollHeartbeatAndValidation(t *testing.T) {
 
 func TestCommandJobLongPollOnlyWaitsOnMatchingRevision(t *testing.T) {
 	s := NewServer(Config{APIToken: "test-token", CommandTimeout: 3 * time.Second, MaxCommandOutputChars: 20000})
-	id, err := s.startJob(commandInput{Command: "sleep 2", Workdir: t.TempDir()})
+	id, err := s.startJob(commandInput{Command: "printf ready; sleep 2", Workdir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	current, _, _ := s.getJob(id, 0)
+	current := waitForJobStdout(t, s, id, "ready")
 
 	for _, after := range []uint64{0, current.Revision + 1} {
 		started := time.Now()
