@@ -19,7 +19,7 @@ func LoadConfig() (Config, error) {
 	cfg := Config{
 		Address:               envString("LISTEN_ADDR", "127.0.0.1:8787"),
 		APIToken:              strings.TrimSpace(os.Getenv("API_TOKEN")),
-		CommandTimeout:        time.Duration(envInt("COMMAND_TIMEOUT_SECONDS", 1800)) * time.Second,
+		CommandTimeout:        time.Duration(envInt("COMMAND_TIMEOUT_SECONDS", 86400)) * time.Second,
 		MaxCommandOutputChars: envInt("MAX_COMMAND_OUTPUT_CHARS", 180000),
 	}
 	if cfg.APIToken == "" {

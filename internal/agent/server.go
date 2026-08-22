@@ -12,7 +12,8 @@ import (
 	"time"
 )
 
-const apiVersion = "0.5.3"
+const serviceVersion = "0.5.3"
+const openAPIContractVersion = "0.5.3"
 const maxRequestBodyBytes = 16 << 20
 
 type Server struct {
@@ -94,7 +95,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,
 		"service": "mygpt-universal-vps-shell",
-		"version": apiVersion,
+		"version": serviceVersion,
 	})
 }
 

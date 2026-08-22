@@ -3,7 +3,9 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -85,8 +87,8 @@ func TestOpenAPIExposesUniversalNonConsequentialRunCommand(t *testing.T) {
 	if err := json.Unmarshal([]byte(openAPISpec), &spec); err != nil {
 		t.Fatal(err)
 	}
-	if spec.Info.Version != apiVersion {
-		t.Fatalf("OpenAPI version %q does not match code version %q", spec.Info.Version, apiVersion)
+	if spec.Info.Version != openAPIContractVersion {
+		t.Fatalf("OpenAPI version %q does not match frozen contract version %q", spec.Info.Version, openAPIContractVersion)
 	}
 	if spec.Components.Schemas == nil {
 		t.Fatal("components.schemas must be an object, even when empty")
@@ -133,6 +135,14 @@ func TestOpenAPIExposesUniversalNonConsequentialRunCommand(t *testing.T) {
 	}
 }
 
+func TestOpenAPIContractIsFrozen(t *testing.T) {
+	const want = "b703d50a1f9817bf537a6802bda4b83122e765450ab075e1d096086ab9ee3872"
+	got := fmt.Sprintf("%x", sha256.Sum256([]byte(openAPISpec)))
+	if got != want {
+		t.Fatalf("OpenAPI contract changed: got %s want %s; review OPENAPI_CONTRACT.md before updating the lock", got, want)
+	}
+}
+
 func TestHealthVersionMatchesOpenAPI(t *testing.T) {
 	s := NewServer(Config{})
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
@@ -147,8 +157,8 @@ func TestHealthVersionMatchesOpenAPI(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &health); err != nil {
 		t.Fatal(err)
 	}
-	if health.Version != apiVersion {
-		t.Fatalf("health version %q does not match %q", health.Version, apiVersion)
+	if health.Version != serviceVersion {
+		t.Fatalf("health version %q does not match %q", health.Version, serviceVersion)
 	}
 }
 

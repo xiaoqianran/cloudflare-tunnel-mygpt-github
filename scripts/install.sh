@@ -34,7 +34,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
   cat >"$ENV_FILE" <<EOF
 API_TOKEN=$API_TOKEN
 LISTEN_ADDR=127.0.0.1:8787
-COMMAND_TIMEOUT_SECONDS=1800
+COMMAND_TIMEOUT_SECONDS=86400
 MAX_COMMAND_OUTPUT_CHARS=180000
 EOF
   chmod 0600 "$ENV_FILE"
@@ -43,7 +43,7 @@ EOF
   echo "Save this token; Custom GPT uses it as Bearer authentication."
 else
   echo "Keeping existing $ENV_FILE, including any provider-specific variables or credentials."
-  grep -q '^COMMAND_TIMEOUT_SECONDS=' "$ENV_FILE" || echo 'COMMAND_TIMEOUT_SECONDS=1800' >>"$ENV_FILE"
+  grep -q '^COMMAND_TIMEOUT_SECONDS=' "$ENV_FILE" || echo 'COMMAND_TIMEOUT_SECONDS=86400' >>"$ENV_FILE"
   grep -q '^MAX_COMMAND_OUTPUT_CHARS=' "$ENV_FILE" || echo 'MAX_COMMAND_OUTPUT_CHARS=180000' >>"$ENV_FILE"
 fi
 

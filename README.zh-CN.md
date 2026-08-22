@@ -258,7 +258,7 @@ Agent 会为 shell 补充常见安装路径：
 ```dotenv
 API_TOKEN=<random secret>
 LISTEN_ADDR=127.0.0.1:8787
-COMMAND_TIMEOUT_SECONDS=1800
+COMMAND_TIMEOUT_SECONDS=86400
 MAX_COMMAND_OUTPUT_CHARS=180000
 ```
 
@@ -284,7 +284,7 @@ systemd 的 EnvironmentFile 是：
 服务端默认：
 
 ```text
-COMMAND_TIMEOUT_SECONDS=1800
+COMMAND_TIMEOUT_SECONDS=86400
 ```
 
 请求中的 `timeout_seconds` 可以缩短单次调用，但不能突破服务器上限。
