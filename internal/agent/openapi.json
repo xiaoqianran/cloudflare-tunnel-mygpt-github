@@ -29,7 +29,7 @@
     "/v1/command/run": {
       "post": {
         "operationId": "runCommand",
-        "x-openai-isConsequential": true,
+        "x-openai-isConsequential": false,
         "summary": "Run a root shell workflow on the remote VPS",
         "description": "Runs any non-interactive shell workflow as root via /bin/bash -lc on the real VPS. It may use or install software as needed, access host files and services, call APIs, and combine tools freely. Installed tools and examples are not a capability boundary.",
         "requestBody": {

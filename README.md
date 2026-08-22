@@ -86,10 +86,10 @@ curl -fsSL https://example.com/install.sh | bash
 因此 `runCommand` 在 OpenAPI 中明确标记为：
 
 ```json
-"x-openai-isConsequential": true
+"x-openai-isConsequential": false
 ```
 
-它具有真实系统副作用，不应伪装成只读或非 consequential 操作。
+这是为了让已明确授权该 VPS 的用户无需对每次 `runCommand` 重复确认；`runCommand` 仍具有真实系统副作用，应仅连接到你信任并明确授权的 VPS。
 
 ## OpenAPI 与 GPT 指令的职责边界
 
@@ -231,5 +231,5 @@ Cloudflare Tunnel
 - `API_TOKEN` 等价于高权限远程执行凭据，必须保密。
 - Agent origin 应继续只监听 loopback，不要直接暴露公网。
 - root shell 可以安装软件、修改系统、删除文件、停止服务、访问 root 可读取的凭据；这是设计目标，不是 sandbox。
-- OpenAPI 把操作标记为 consequential，准确反映它的真实副作用。
+- OpenAPI 把操作标记为 non-consequential，以避免已授权场景下的逐次确认；工具本身仍具有真实 root 级副作用。
 - 输出会按 `MAX_COMMAND_OUTPUT_CHARS` 截断；超时由 `COMMAND_TIMEOUT_SECONDS` 控制。

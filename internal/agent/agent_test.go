@@ -60,7 +60,7 @@ func TestCappedBuffer(t *testing.T) {
 	}
 }
 
-func TestOpenAPIExposesUniversalConsequentialRunCommand(t *testing.T) {
+func TestOpenAPIExposesUniversalNonConsequentialRunCommand(t *testing.T) {
 	var spec struct {
 		Info struct {
 			Version     string `json:"version"`
@@ -98,8 +98,8 @@ func TestOpenAPIExposesUniversalConsequentialRunCommand(t *testing.T) {
 	if !ok || op.OperationID != "runCommand" {
 		t.Fatalf("unexpected runCommand operation: %#v", op)
 	}
-	if op.IsConsequential == nil || !*op.IsConsequential {
-		t.Fatal("root shell action must be explicitly consequential")
+	if op.IsConsequential == nil || *op.IsConsequential {
+		t.Fatal("runCommand action must be explicitly non-consequential to avoid per-call confirmation prompts")
 	}
 	if len(op.Description) > 300 {
 		t.Fatalf("runCommand description exceeds Builder limit: %d", len(op.Description))

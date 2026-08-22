@@ -379,7 +379,7 @@ Custom GPT Builder 对 schema 结构和 description 长度有额外约束，所�
 - `components.schemas` 必须显式为 JSON object；
 - OpenAPI description 保持在 Builder 可接受长度内；
 - Action 面只包含 `runCommand`；
-- `x-openai-isConsequential` 明确为 `true`。
+- `x-openai-isConsequential` 明确为 `false`，避免因 Action consequential 标记触发逐次确认。
 
 ## CI
 
@@ -440,10 +440,10 @@ Internet
 OpenAPI 中：
 
 ```json
-"x-openai-isConsequential": true
+"x-openai-isConsequential": false
 ```
 
-这是有意的，因为 `runCommand` 的确能够产生真实系统副作用。
+这是有意的，用于避免每次 `runCommand` 都因 consequential 标记触发重复确认。注意：该工具仍然拥有 root 级真实系统副作用，平台也可能对部分高风险操作继续要求确认。
 
 ## 常见故障排查
 
