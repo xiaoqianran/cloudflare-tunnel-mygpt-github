@@ -1,10 +1,14 @@
 # mygpt-cf-tunnel
 
+[![test](https://github.com/xiaoqianran/mygpt-cf-tunnel/actions/workflows/test.yml/badge.svg)](https://github.com/xiaoqianran/mygpt-cf-tunnel/actions/workflows/test.yml)
+
+> **中文完整文档：** [`README.zh-CN.md`](./README.zh-CN.md) · **Custom GPT 指令：** [`GPT_INSTRUCTIONS.md`](./GPT_INSTRUCTIONS.md)
+
 把 Custom GPT 连接到一台真实 VPS 的 **通用 root shell**。整个 Action 面只有一个操作：`runCommand`。
 
 它不是 GitHub 工具集合，也不是预装 CLI 的固定能力列表。模型可以直接使用服务器已有能力；缺什么，就通过 root shell 安装什么，然后继续组合完成工作流。
 
-> **推荐 GPT 描述**：连接远程 VPS 的 root shell。通过唯一的 `runCommand` 自主安装所需软件、调用任意 CLI、读写文件、运行脚本与服务，并完成服务器能够执行的任意工作流。
+> **推荐 GPT 描述**：连接远程 VPS 的 root shell。通过唯一的 `runCommand` 使用或自主安装所需软件，组合命令、程序、服务与网络能力，并完成服务器能够执行的任意工作流。
 
 可直接粘贴到 GPT Builder 的完整指令见 [`GPT_INSTRUCTIONS.md`](./GPT_INSTRUCTIONS.md)。
 
