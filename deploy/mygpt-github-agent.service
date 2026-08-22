@@ -1,5 +1,5 @@
 [Unit]
-Description=MyGPT VPS Root Shell Agent
+Description=MyGPT Universal VPS Root Shell Agent
 After=network-online.target
 Wants=network-online.target
 
@@ -12,7 +12,7 @@ Environment=HOME=/root
 Environment=USER=root
 Environment=LOGNAME=root
 Environment=SHELL=/bin/bash
-Environment=PATH=/root/.local/bin:/root/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+Environment=PATH=/root/.local/bin:/root/.cargo/bin:/root/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
 EnvironmentFile=/etc/mygpt-github-agent.env
 ExecStart=/usr/local/bin/mygpt-github-agent
 Restart=always

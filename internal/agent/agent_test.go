@@ -5,51 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
-
-func TestRepoAllowed(t *testing.T) {
-	if !repoAllowed("xiaoqianran/demo", nil) {
-		t.Fatal("empty allowlist should allow all repositories")
-	}
-	if !repoAllowed("xiaoqianran/demo", []string{"xiaoqianran/*"}) {
-		t.Fatal("owner wildcard should match")
-	}
-	if repoAllowed("other/demo", []string{"xiaoqianran/*"}) {
-		t.Fatal("different owner should not match")
-	}
-}
-
-func TestCursorRoundTrip(t *testing.T) {
-	want := repoCursor{Path: "src/main.go", Offset: 12345}
-	got, err := decodeCursor(encodeCursor(want))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != want {
-		t.Fatalf("cursor mismatch: got %#v want %#v", got, want)
-	}
-}
-
-func TestSafeRepoPath(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("a"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := safeRepoPath(root, "a.txt", true); err != nil {
-		t.Fatalf("valid path rejected: %v", err)
-	}
-	for _, bad := range []string{"../secret", "/etc/passwd", ".git/config"} {
-		if _, err := safeRepoPath(root, bad, false); err == nil {
-			t.Fatalf("unsafe path accepted: %s", bad)
-		}
-	}
-}
 
 func TestCommandEndpointIsRegisteredAndAuthenticated(t *testing.T) {
 	s := NewServer(Config{APIToken: "test-token"})
@@ -61,7 +21,7 @@ func TestCommandEndpointIsRegisteredAndAuthenticated(t *testing.T) {
 	}
 }
 
-func TestLegacyRepositoryRoutesAreNotExposed(t *testing.T) {
+func TestOnlyCommandActionIsExposed(t *testing.T) {
 	s := NewServer(Config{APIToken: "test-token"})
 	for _, path := range []string{"/v1/repository/sync", "/v1/files/read", "/v1/git/commit-push", "/v1/github/release"} {
 		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
@@ -69,21 +29,20 @@ func TestLegacyRepositoryRoutesAreNotExposed(t *testing.T) {
 		rec := httptest.NewRecorder()
 		s.Handler().ServeHTTP(rec, req)
 		if rec.Code != http.StatusNotFound {
-			t.Fatalf("legacy route %s should not be exposed, got %d", path, rec.Code)
+			t.Fatalf("unexpected legacy route %s: status %d", path, rec.Code)
 		}
 	}
 }
 
 func TestDecodeJSONRejectsUnknownFieldsAndTrailingValues(t *testing.T) {
-	tests := []string{
-		`{"repo":"alice/demo","unexpected":true}`,
-		`{"repo":"alice/demo"} {"repo":"bob/demo"}`,
-	}
-	for _, body := range tests {
+	for _, body := range []string{
+		`{"command":"true","unexpected":true}`,
+		`{"command":"true"} {"command":"false"}`,
+	} {
 		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 		rec := httptest.NewRecorder()
 		var dst struct {
-			Repo string `json:"repo"`
+			Command string `json:"command"`
 		}
 		if err := decodeJSON(rec, req, &dst); err == nil {
 			t.Fatalf("expected invalid JSON body to be rejected: %s", body)
@@ -101,19 +60,47 @@ func TestCappedBuffer(t *testing.T) {
 	}
 }
 
-func TestHealthVersionMatchesOpenAPI(t *testing.T) {
+func TestOpenAPIExposesUniversalConsequentialRunCommand(t *testing.T) {
 	var spec struct {
 		Info struct {
-			Version string `json:"version"`
+			Version     string `json:"version"`
+			Description string `json:"description"`
 		} `json:"info"`
+		Paths map[string]map[string]struct {
+			OperationID     string `json:"operationId"`
+			IsConsequential *bool  `json:"x-openai-isConsequential"`
+			Description     string `json:"description"`
+		} `json:"paths"`
 	}
 	if err := json.Unmarshal([]byte(openAPISpec), &spec); err != nil {
 		t.Fatal(err)
 	}
-	if spec.Info.Version != "0.3.0" {
-		t.Fatalf("unexpected OpenAPI version: %s", spec.Info.Version)
+	if spec.Info.Version != apiVersion {
+		t.Fatalf("OpenAPI version %q does not match code version %q", spec.Info.Version, apiVersion)
 	}
+	if len(spec.Paths) != 1 {
+		t.Fatalf("expected exactly one action path, got %d", len(spec.Paths))
+	}
+	methods, ok := spec.Paths["/v1/command/run"]
+	if !ok {
+		t.Fatal("runCommand path missing from OpenAPI")
+	}
+	op, ok := methods["post"]
+	if !ok || op.OperationID != "runCommand" {
+		t.Fatalf("unexpected runCommand operation: %#v", op)
+	}
+	if op.IsConsequential == nil || !*op.IsConsequential {
+		t.Fatal("root shell action must be explicitly consequential")
+	}
+	for _, phrase := range []string{"install", "arbitrary workflows", "not a capability boundary"} {
+		combined := strings.ToLower(spec.Info.Description + " " + op.Description)
+		if !strings.Contains(combined, phrase) {
+			t.Fatalf("OpenAPI should communicate universal capability; missing %q", phrase)
+		}
+	}
+}
 
+func TestHealthVersionMatchesOpenAPI(t *testing.T) {
 	s := NewServer(Config{})
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -127,134 +114,40 @@ func TestHealthVersionMatchesOpenAPI(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &health); err != nil {
 		t.Fatal(err)
 	}
-	if health.Version != spec.Info.Version {
-		t.Fatalf("health version %q does not match OpenAPI version %q", health.Version, spec.Info.Version)
+	if health.Version != apiVersion {
+		t.Fatalf("health version %q does not match %q", health.Version, apiVersion)
 	}
 }
 
-func TestHostCommandRunsOnHost(t *testing.T) {
+func TestHostCommandRunsInRequestedDirectoryAndAcceptsStdin(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not installed")
 	}
 	root := t.TempDir()
-	s := NewServer(Config{CommandTimeout: 10 * time.Second, MaxCommandOutputChars: 20_000})
-	result, err := s.runHostCommand(context.Background(), "printf host && printf %s \"$PWD\"", root, 0)
+	s := NewServer(Config{CommandTimeout: 10 * time.Second, MaxCommandOutputChars: 20000})
+	result, err := s.runHostCommand(context.Background(), `printf '%s|' "$PWD"; cat`, root, "from-stdin", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ExitCode != 0 || result.Stdout != "host"+root {
+	if result.ExitCode != 0 || result.Stdout != root+"|from-stdin" {
 		t.Fatalf("unexpected host command result: %#v", result)
 	}
 }
 
-func TestLocalWorkspaceReadWriteAndPage(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git is not installed")
+func TestHostCommandTimeoutKillsWorkflow(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not installed")
 	}
-	root := t.TempDir()
-	repo := "alice/demo"
-	dir := repoDir(root, repo)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("git", "init", "-q")
-	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v: %s", err, out)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello local workspace\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cmd = exec.Command("git", "add", "a.txt")
-	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git add: %v: %s", err, out)
-	}
-
-	s := NewServer(Config{
-		WorkspaceRoot:         root,
-		APIToken:              "test-token",
-		CommandTimeout:        10 * time.Second,
-		MaxCommandOutputChars: 20_000,
-		MaxReadFiles:          50,
-		MaxPageChars:          20_000,
-		MaxWriteBytes:         1_000_000,
-		MaxDiffChars:          20_000,
-	})
-	files, err := s.readFiles(context.Background(), repo, []string{"a.txt"})
+	s := NewServer(Config{CommandTimeout: 5 * time.Second, MaxCommandOutputChars: 20000})
+	started := time.Now()
+	result, err := s.runHostCommand(context.Background(), "sleep 10", "", "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 1 || files[0].Content != "hello local workspace\n" {
-		t.Fatalf("unexpected read result: %#v", files)
+	if !result.TimedOut || result.ExitCode == 0 {
+		t.Fatalf("expected timeout result, got %#v", result)
 	}
-
-	if _, err := s.applyFileChanges(repo, []FileChange{{Path: "src/b.txt", Content: "second file\n"}}); err != nil {
-		t.Fatal(err)
-	}
-	if data, err := os.ReadFile(filepath.Join(dir, "src", "b.txt")); err != nil || string(data) != "second file\n" {
-		t.Fatalf("write failed: %v %q", err, data)
-	}
-
-	page, next, _, err := s.readRepoPage(context.Background(), repo, "", "", 20_000, 40)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(page) != 2 {
-		t.Fatalf("expected two text files, got %d", len(page))
-	}
-	if next != nil {
-		t.Fatalf("unexpected next cursor: %v", *next)
-	}
-}
-
-func TestCommitPushMissingMessageDoesNotStageChanges(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git is not installed")
-	}
-	root := t.TempDir()
-	repo := "alice/demo"
-	dir := repoDir(root, repo)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, args := range [][]string{
-		{"init", "-q"},
-		{"config", "user.name", "Test User"},
-		{"config", "user.email", "test@example.com"},
-	} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("initial\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	for _, args := range [][]string{{"add", "a.txt"}, {"commit", "-qm", "initial"}} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("changed\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	s := NewServer(Config{WorkspaceRoot: root, APIToken: "test-token", CommandTimeout: 10 * time.Second})
-	req := httptest.NewRequest(http.MethodPost, "/v1/git/commit-push", strings.NewReader(`{"repo":"alice/demo"}`))
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec := httptest.NewRecorder()
-	s.auth(http.HandlerFunc(s.handleCommitPush)).ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected status 400, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	cmd := exec.Command("git", "diff", "--cached", "--quiet")
-	cmd.Dir = dir
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("failed request staged changes unexpectedly: %v", err)
+	if time.Since(started) > 4*time.Second {
+		t.Fatalf("timeout did not terminate workflow promptly: %s", time.Since(started))
 	}
 }

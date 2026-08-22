@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/xiaoqianran/cloudflare-tunnel-mygpt-github/internal/agent"
+	"github.com/xiaoqianran/mygpt-cf-tunnel/internal/agent"
 )
 
 func main() {
@@ -22,6 +22,6 @@ func main() {
 		IdleTimeout:       90 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
-	log.Printf("mygpt root shell agent listening on %s", cfg.Address)
+	log.Printf("mygpt universal VPS root shell listening on %s", cfg.Address)
 	log.Fatal(server.ListenAndServe())
 }

@@ -1,75 +1,40 @@
 # mygpt-cf-tunnel
 
-一个刻意极简的 **Custom GPT -> Cloudflare Tunnel -> VPS root shell** 后端。
+把 Custom GPT 连接到一台真实 VPS 的 **通用 root shell**。整个 Action 面只有一个操作：`runCommand`。
 
-从 `v0.3.0` 开始，给 Custom GPT 暴露的 Action **只保留 `runCommand`**。不再要求 GPT 分别调用 `syncRepository`、`readFiles`、`applyChanges`、`commitAndPush`、`createRelease` 等专用动作；这些事情都可以直接通过远程主机上的 shell 和 CLI 完成。
+它不是 GitHub 工具集合，也不是预装 CLI 的固定能力列表。模型可以直接使用服务器已有能力；缺什么，就通过 root shell 安装什么，然后继续组合完成工作流。
+
+> **推荐 GPT 描述**：连接远程 VPS 的 root shell。通过唯一的 `runCommand` 自主安装所需软件、调用任意 CLI、读写文件、运行脚本与服务，并完成服务器能够执行的任意工作流。
+
+可直接粘贴到 GPT Builder 的完整指令见 [`GPT_INSTRUCTIONS.md`](./GPT_INSTRUCTIONS.md)。
+
+## 架构
 
 ```text
 Custom GPT
-    │ HTTPS + Bearer API_TOKEN
+    │  HTTPS + Bearer API_TOKEN
     ▼
 Cloudflare Tunnel
     ▼
 127.0.0.1:8787
-MyGPT VPS Root Shell Agent (systemd, root)
+Universal VPS Root Shell Agent (systemd, root)
     │
-    └─ runCommand
-         └─ /bin/bash -lc "..."
-              ├─ gh / git
-              ├─ apt / apt-get / systemctl
-              ├─ modal
-              ├─ kaggle
-              ├─ curl / wget
-              ├─ python / pip / uv
-              ├─ node / npm
-              └─ 任何 root 能执行的命令或脚本
+    └── runCommand
+          │
+          └── /bin/bash -lc <command>
+                 │
+                 ├── 使用服务器已有程序
+                 ├── apt / pip / npm / cargo / go install / curl ...
+                 ├── 安装新的运行时、CLI、库或系统包
+                 ├── 写脚本 / 编译程序 / 调 API / 管服务
+                 └── 组合成服务器能够执行的任意非交互式工作流
 ```
 
-## 核心理念
+`gh`、`git`、`modal`、`kaggle`、Python、Node、Go、Docker、数据库客户端或云平台 CLI 都只是示例。**它们不是能力边界。**
 
-只要 VPS 上能通过命令行完成，就不需要为 Custom GPT 再设计一个专门的 Action。
+## 设计原则
 
-例如 GitHub 仓库任务可以直接：
-
-```bash
-mkdir -p /srv/mygpt/repos/xiaoqianran
-cd /srv/mygpt/repos/xiaoqianran
-[ -d mygpt-cf-tunnel/.git ] \
-  && git -C mygpt-cf-tunnel pull --ff-only \
-  || gh repo clone xiaoqianran/mygpt-cf-tunnel
-```
-
-修改、测试和推送也全部走同一个入口：
-
-```bash
-cd /srv/mygpt/repos/xiaoqianran/mygpt-cf-tunnel
-git status --short
-# sed/python/cat 等方式修改文件
-go test ./...
-git diff --check
-git add -A
-git commit -m 'change'
-git push
-```
-
-其他平台同理：
-
-```bash
-apt-get update && apt-get install -y jq
-
-gh auth status
-
-gh repo view xiaoqianran/mygpt-cf-tunnel
-
-modal token show
-modal run app.py
-
-kaggle datasets list -s imagenet
-```
-
-`runCommand` 运行在宿主机，不在容器或仓库 sandbox 内；systemd 服务用户是 `root`，所以它本质上是通过受保护 API 暴露的远程 root shell。
-
-## Action 请求
+### 一个 Action，而不是一堆专用 API
 
 OpenAPI 只公开：
 
@@ -77,27 +42,74 @@ OpenAPI 只公开：
 POST /v1/command/run
 ```
 
-请求示例：
+过去的 `syncRepository`、`readFiles`、`applyChanges`、`gitDiff`、`commitAndPush`、`createRelease` 等专用 API 已从代码中删除。
+
+仓库任务直接由 shell 完成，例如：
+
+```bash
+gh repo clone owner/repo /srv/work/repo
+cd /srv/work/repo
+rg 'target'
+python3 scripts/change.py
+go test ./...
+git diff --check
+git add -A
+git commit -m 'change'
+git push
+```
+
+如果 `gh` 不存在，可以先安装；如果项目需要另一个运行时，也可以先安装那个运行时。工具选择属于工作流的一部分，而不是 Agent API 的一部分。
+
+### 能力可以在运行时扩展
+
+`runCommand` 是 root shell，所以模型可以先获取能力，再完成任务。例如：
+
+```bash
+apt-get update && apt-get install -y jq
+python3 -m pip install --user some-cli
+npm install -g some-cli
+cargo install some-cli
+go install example.com/tool@latest
+curl -fsSL https://example.com/install.sh | bash
+```
+
+上述方式仍然只是示例。只要 VPS 的操作系统、网络和权限允许，可以采用适合目标的安装或构建方式。
+
+### 真实主机，不是仓库 sandbox
+
+`workdir` 可以是 root 能访问的任意真实主机目录，默认 `/root`。命令可以管理系统包、进程、systemd 服务、文件、网络请求、代码、数据和部署目标。
+
+因此 `runCommand` 在 OpenAPI 中明确标记为：
+
+```json
+"x-openai-isConsequential": true
+```
+
+它具有真实系统副作用，不应伪装成只读或非 consequential 操作。
+
+## Action 请求
 
 ```json
 {
-  "command": "gh auth status && uname -a",
+  "command": "set -euo pipefail\nuname -a\ncommand -v jq || apt-get update && apt-get install -y jq\njq --version",
   "workdir": "/root",
-  "timeout_seconds": 120
+  "stdin": "",
+  "timeout_seconds": 300
 }
 ```
 
-服务执行：
+执行语义：
 
 ```text
-/bin/bash -lc '<command>'
+root user
+  -> /bin/bash -lc
+  -> real VPS filesystem / network / processes / credentials
 ```
 
-返回值包含：
+返回：
 
 ```json
 {
-  "command": "...",
   "workdir": "/root",
   "exit_code": 0,
   "stdout": "...",
@@ -108,51 +120,45 @@ POST /v1/command/run
 }
 ```
 
-`timeout_seconds` 只能缩短单次命令超时，不能超过服务器端 `COMMAND_TIMEOUT_SECONDS`。
+`stdin` 可用于非交互式 CLI 输入、脚本、payload 或文件内容。
 
-## CLI 环境
+`timeout_seconds` 只能缩短本次调用的时间，不能突破服务器端 `COMMAND_TIMEOUT_SECONDS`。超时后 Agent 会终止整个 shell 进程组，避免留下意外的子进程。
 
-服务固定提供适合 root CLI 的基础环境：
+## 环境与凭据
+
+systemd 服务以 `root:root` 运行，并提供常见工具安装路径：
 
 ```text
-HOME=/root
-USER=root
-LOGNAME=root
-SHELL=/bin/bash
-PATH=/root/.local/bin:/root/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+/root/.local/bin
+/root/.cargo/bin
+/root/go/bin
+/usr/local/go/bin
+/usr/local/sbin
+/usr/local/bin
+/usr/sbin
+/usr/bin
+/sbin
+/bin
+/snap/bin
 ```
 
-因此安装到 `/usr/local/bin`、`/usr/bin` 等常见位置的 CLI 可以直接使用。
+同时保留宿主机已有 PATH，并使用 root 的 login shell 配置。
 
-`modal`、`kaggle` 等工具可以读取 root 用户自己的配置目录，例如 `/root/.modal`、`/root/.kaggle`。
+`/etc/mygpt-github-agent.env` 中除了 Agent 自己的配置外，其他环境变量也会被 `runCommand` 子进程继承。这样第三方 CLI 的 token 或非秘密配置可以留在 VPS，而不需要写进 GPT 指令。
 
-如果 `/etc/mygpt-github-agent.env` 中设置了 `GITHUB_TOKEN` 且没有设置 `GH_TOKEN`，`runCommand` 会自动为子进程补充同值的 `GH_TOKEN`，便于 `gh` CLI 使用。也可以直接通过 `gh auth login` 在 root 用户环境完成认证。
+不要让模型为了“检查配置”而输出完整 `env`、token 文件或密钥。认证状态应尽量通过对应 CLI 的 status/auth 命令检查。
 
 ## 安装 / 升级
 
-服务本身的构建只要求 Go 1.23+。`git`、`gh`、`modal`、`kaggle`、`rg` 等不再是安装 agent 的强制依赖；需要什么工具，可以之后通过 `runCommand` 安装。
+当前仍保留历史二进制和 systemd 单元名称 `mygpt-github-agent`，这是为了兼容已部署服务器的原地升级；它们不再代表 Agent 的能力边界。
+
+服务本身构建只要求 Go 1.23+：
 
 ```bash
 git clone https://github.com/xiaoqianran/mygpt-cf-tunnel.git
 cd mygpt-cf-tunnel
 bash ./scripts/install.sh
 ```
-
-已有 checkout：
-
-```bash
-git pull
-bash ./scripts/install.sh
-```
-
-安装脚本会：
-
-- 运行 `go test ./...`
-- 构建当前架构的静态 Go 二进制
-- 安装到 `/usr/local/bin/mygpt-github-agent`
-- 创建 `/etc/mygpt-github-agent.env`（首次安装）
-- 以 `root:root` 启动 systemd 服务
-- 默认只监听 `127.0.0.1:8787`
 
 默认配置：
 
@@ -161,10 +167,9 @@ API_TOKEN=<random secret>
 LISTEN_ADDR=127.0.0.1:8787
 COMMAND_TIMEOUT_SECONDS=1800
 MAX_COMMAND_OUTPUT_CHARS=180000
-GITHUB_TOKEN=
 ```
 
-检查：
+安装后检查：
 
 ```bash
 curl http://127.0.0.1:8787/health
@@ -174,7 +179,7 @@ systemctl status mygpt-github-agent
 
 ## Cloudflare Tunnel
 
-保持 origin 仅监听：
+Agent 默认只监听：
 
 ```text
 127.0.0.1:8787
@@ -186,41 +191,17 @@ Cloudflare Tunnel 的 Published application 指向：
 http://localhost:8787
 ```
 
-例如域名：
-
-```text
-git-agent.example.com
-```
-
 然后在 Custom GPT Actions 中导入：
 
 ```text
-https://git-agent.example.com/openapi.json
+https://<你的域名>/openapi.json
 ```
 
-认证选择 Bearer API Key，值为 `/etc/mygpt-github-agent.env` 中的 `API_TOKEN`。
-
-不要把 Cloudflare Tunnel token、GitHub token、Modal token、Kaggle 凭据放进 GPT 指令。让这些凭据留在 VPS/root 用户环境中。
-
-## 推荐 GPT 指令
-
-```text
-所有服务器、GitHub、部署、构建和文件操作优先使用 runCommand。
-把 runCommand 视为远程 VPS root shell：通过 /bin/bash -lc 执行命令。
-
-GitHub 仓库任务不需要专用 GitHub Action：直接使用 gh 和 git。
-需要仓库时自行 clone/fetch/pull；读取文件用 cat/sed/rg；修改文件可用 python/sed/cat；测试后用 git diff 检查，再 commit/push。
-
-需要其他能力时优先调用服务器上已有 CLI；缺少工具时可以使用 apt/apt-get、pip、npm 等安装，然后继续执行。
-例如可以使用 gh、modal、kaggle、systemctl、curl、python、node 等。
-
-命令失败时读取 exit_code/stdout/stderr，修复后重试。
-不要因为存在内置 GitHub、网页搜索或其他连接器就绕过 runCommand；只要 VPS shell 可以完成，就优先使用 runCommand。
-```
+认证使用 Bearer API Key，值为 `/etc/mygpt-github-agent.env` 中的 `API_TOKEN`。
 
 ## 安全模型
 
-这不是“有限命令执行器”，而是有意设计成：
+这是有意设计的高权限执行入口：
 
 ```text
 Cloudflare Tunnel
@@ -233,7 +214,7 @@ Cloudflare Tunnel
 因此：
 
 - `API_TOKEN` 等价于高权限远程执行凭据，必须保密。
-- 不要把 `127.0.0.1:8787` 直接暴露公网。
-- 建议只通过受控 Cloudflare Tunnel 暴露。
-- root shell 可以修改系统、安装软件、删除文件、停止服务或改写凭据；这是本项目的设计目标，不是 sandbox。
-- 输出会按 `MAX_COMMAND_OUTPUT_CHARS` 截断，命令会受 `COMMAND_TIMEOUT_SECONDS` 限制。
+- Agent origin 应继续只监听 loopback，不要直接暴露公网。
+- root shell 可以安装软件、修改系统、删除文件、停止服务、访问 root 可读取的凭据；这是设计目标，不是 sandbox。
+- OpenAPI 把操作标记为 consequential，准确反映它的真实副作用。
+- 输出会按 `MAX_COMMAND_OUTPUT_CHARS` 截断；超时由 `COMMAND_TIMEOUT_SECONDS` 控制。

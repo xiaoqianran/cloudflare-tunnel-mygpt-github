@@ -3,13 +3,18 @@ package agent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
+
+const commonPath = "/root/.local/bin:/root/.cargo/bin:/root/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 
 type cappedBuffer struct {
 	buf       bytes.Buffer
@@ -35,7 +40,6 @@ func (w *cappedBuffer) Write(p []byte) (int, error) {
 func (w *cappedBuffer) String() string { return w.buf.String() }
 
 type hostCommandResult struct {
-	Command    string `json:"command"`
 	Workdir    string `json:"workdir"`
 	ExitCode   int    `json:"exit_code"`
 	Stdout     string `json:"stdout"`
@@ -46,27 +50,36 @@ type hostCommandResult struct {
 }
 
 func commandEnv() []string {
-	env := append([]string{}, os.Environ()...)
-	// A root systemd service does not always inherit the same environment as an
-	// interactive root login. Pin the basic identity expected by common CLIs.
-	env = append(env,
-		"HOME=/root",
-		"USER=root",
-		"LOGNAME=root",
-		"SHELL=/bin/bash",
-	)
-
-	// gh prefers GH_TOKEN. Reuse a server-side GITHUB_TOKEN when one is already
-	// configured, without requiring the GPT to transmit GitHub credentials.
-	if strings.TrimSpace(os.Getenv("GH_TOKEN")) == "" {
-		if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" {
-			env = append(env, "GH_TOKEN="+token)
+	values := make(map[string]string)
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok && key != "" {
+			values[key] = value
 		}
+	}
+	values["HOME"] = "/root"
+	values["USER"] = "root"
+	values["LOGNAME"] = "root"
+	values["SHELL"] = "/bin/bash"
+	if current := strings.TrimSpace(values["PATH"]); current != "" {
+		values["PATH"] = commonPath + ":" + current
+	} else {
+		values["PATH"] = commonPath
+	}
+
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	env := make([]string, 0, len(keys))
+	for _, key := range keys {
+		env = append(env, key+"="+values[key])
 	}
 	return env
 }
 
-func (s *Server) runHostCommand(ctx context.Context, command, workdir string, timeoutSeconds int) (hostCommandResult, error) {
+func (s *Server) runHostCommand(ctx context.Context, command, workdir, stdin string, timeoutSeconds int) (hostCommandResult, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return hostCommandResult{}, fmt.Errorf("command is required")
@@ -103,14 +116,18 @@ func (s *Server) runHostCommand(ctx context.Context, command, workdir string, ti
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// bash -l may rebuild PATH from root profile files, so prepend the common
-	// locations inside the executed shell as well as in the systemd unit. This
-	// covers Go, pip/uv-installed CLIs, Cargo, snap and normal system binaries.
-	const pathPrefix = "/root/.local/bin:/root/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
-	shellCommand := "export PATH=" + pathPrefix + ":\"$PATH\"; " + command
-	cmd := exec.CommandContext(commandCtx, "/bin/bash", "-lc", shellCommand)
+	// A login shell may rebuild PATH from root profile files. Prepend common
+	// package-manager install locations inside the shell as well, while retaining
+	// anything supplied by the host environment/profile.
+	shellCommand := "export PATH=" + commonPath + ":\"$PATH\"; " + command
+	cmd := exec.Command("/bin/bash", "-lc", shellCommand)
 	cmd.Dir = dir
 	cmd.Env = commandEnv()
+	cmd.Stdin = strings.NewReader(stdin)
+	// Put the shell and its descendants in their own process group so a timeout
+	// terminates the whole workflow instead of leaving grandchildren behind.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
 	stdout := &cappedBuffer{limit: s.cfg.MaxCommandOutputChars}
 	stderr := &cappedBuffer{limit: s.cfg.MaxCommandOutputChars}
 	if stdout.limit < 1000 {
@@ -119,27 +136,46 @@ func (s *Server) runHostCommand(ctx context.Context, command, workdir string, ti
 	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+
 	started := time.Now()
-	err = cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return hostCommandResult{}, err
+	}
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+
+	var runErr error
+	timedOut := false
+	select {
+	case runErr = <-waitCh:
+	case <-commandCtx.Done():
+		timedOut = errors.Is(commandCtx.Err(), context.DeadlineExceeded)
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		runErr = <-waitCh
+	}
 	duration := time.Since(started)
+
 	exitCode := 0
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+	if runErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) {
 			exitCode = exitErr.ExitCode()
-		} else if commandCtx.Err() == nil {
-			return hostCommandResult{}, err
 		} else {
 			exitCode = -1
 		}
 	}
+	if commandCtx.Err() != nil && exitCode == 0 {
+		exitCode = -1
+	}
 
 	return hostCommandResult{
-		Command:    command,
 		Workdir:    dir,
 		ExitCode:   exitCode,
 		Stdout:     stdout.String(),
 		Stderr:     stderr.String(),
-		TimedOut:   commandCtx.Err() == context.DeadlineExceeded,
+		TimedOut:   timedOut,
 		Truncated:  stdout.truncated || stderr.truncated,
 		DurationMS: duration.Milliseconds(),
 	}, nil

@@ -13,25 +13,26 @@ func (s *Server) handleRunCommand(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Command        string `json:"command"`
 		Workdir        string `json:"workdir"`
+		Stdin          string `json:"stdin"`
 		TimeoutSeconds int    `json:"timeout_seconds"`
 	}
 	if err := decodeJSON(w, r, &input); err != nil {
-		writeError(w, 400, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if strings.TrimSpace(input.Command) == "" {
-		writeError(w, 400, "command is required")
+		writeError(w, http.StatusBadRequest, "command is required")
 		return
 	}
 	if input.TimeoutSeconds < 0 {
-		writeError(w, 400, "timeout_seconds must be positive")
+		writeError(w, http.StatusBadRequest, "timeout_seconds must be positive")
 		return
 	}
 
-	result, err := s.runHostCommand(r.Context(), input.Command, input.Workdir, input.TimeoutSeconds)
+	result, err := s.runHostCommand(r.Context(), input.Command, input.Workdir, input.Stdin, input.TimeoutSeconds)
 	if err != nil {
-		writeError(w, 500, err.Error())
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, 200, result)
+	writeJSON(w, http.StatusOK, result)
 }

@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "MyGPT VPS Root Shell",
-    "version": "0.3.0",
-    "description": "A deliberately minimal Custom GPT Action that exposes one authenticated host-side root shell command runner through Cloudflare Tunnel. Use runCommand for repository work, gh, git, apt, systemctl, modal, kaggle, builds, deployments, file edits, downloads, scripting and general VPS administration."
+    "title": "Universal VPS Root Shell",
+    "version": "0.4.0",
+    "description": "One authenticated action gives the model a general-purpose root shell on the remote VPS. The model can use the host's existing capabilities, install additional packages, runtimes or CLIs when needed, create scripts, manage files and services, call remote APIs, and compose arbitrary non-interactive workflows that the server can execute. Named tools are examples, not a capability boundary."
   },
   "servers": [{"url": "__SERVER_URL__"}],
   "security": [{"BearerAuth": []}],
@@ -16,9 +16,9 @@
     "/v1/command/run": {
       "post": {
         "operationId": "runCommand",
-        "x-openai-isConsequential": false,
-        "summary": "Run any command on the VPS as root",
-        "description": "Runs /bin/bash -lc directly on the VPS host. The systemd service runs as root. This is the universal action: use shell commands and installed CLIs such as gh, git, apt/apt-get, systemctl, modal, kaggle, curl, python, node and arbitrary scripts. Commands may read/write anywhere the root account can access. Output is capped and execution is timeout-limited.",
+        "x-openai-isConsequential": true,
+        "summary": "Execute an arbitrary root shell workflow on the remote VPS",
+        "description": "Universal host execution primitive. Runs a command or multiline shell script with /bin/bash -lc as root on the real VPS, not in a repository sandbox. It may inspect or change the operating system, install any required software or CLI through available package managers or installers, read/write files anywhere root can access, build and run programs, manage services and processes, use credentials already configured on the server, call APIs and cloud platforms, and chain these abilities into arbitrary workflows. Do not infer a fixed tool allowlist from examples: if a required capability is missing, the shell may install or bootstrap it first. Commands are non-interactive, output is capped, and execution is timeout-limited.",
         "requestBody": {
           "required": true,
           "content": {
@@ -29,16 +29,20 @@
                 "properties": {
                   "command": {
                     "type": "string",
-                    "description": "Shell command or multiline shell script to execute with /bin/bash -lc"
+                    "description": "Any shell command or multiline script to execute with /bin/bash -lc. Multiple dependent steps may be combined into one script."
                   },
                   "workdir": {
                     "type": "string",
-                    "description": "Optional host working directory. Absolute paths are supported. Defaults to the service working directory."
+                    "description": "Optional absolute or relative host working directory. Defaults to /root. It is not restricted to a repository workspace."
+                  },
+                  "stdin": {
+                    "type": "string",
+                    "description": "Optional standard input passed to the command. Useful for non-interactive CLI input, scripts, payloads and file content."
                   },
                   "timeout_seconds": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "Optional timeout for this command, capped by COMMAND_TIMEOUT_SECONDS"
+                    "description": "Optional timeout for this call. It may shorten, but cannot exceed, the server-side COMMAND_TIMEOUT_SECONDS limit."
                   }
                 },
                 "required": ["command"]
@@ -47,10 +51,10 @@
           }
         },
         "responses": {
-          "200": {"description": "Command finished; inspect exit_code, stdout, stderr, timed_out and truncated"},
-          "400": {"description": "Invalid request"},
-          "401": {"description": "Missing or invalid Bearer token"},
-          "500": {"description": "Command could not be started or workdir is unavailable"}
+          "200": {"description": "Workflow finished. Inspect exit_code, stdout, stderr, timed_out and truncated before deciding the next step."},
+          "400": {"description": "Invalid request."},
+          "401": {"description": "Missing or invalid Bearer token."},
+          "500": {"description": "The shell could not be started or the requested workdir is unavailable."}
         }
       }
     }
