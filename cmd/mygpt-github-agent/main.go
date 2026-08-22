@@ -13,9 +13,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := agent.EnsureWorkspace(cfg); err != nil {
-		log.Fatal(err)
-	}
 
 	server := &http.Server{
 		Addr:              cfg.Address,
@@ -25,6 +22,6 @@ func main() {
 		IdleTimeout:       90 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
-	log.Printf("mygpt github agent listening on %s", cfg.Address)
+	log.Printf("mygpt root shell agent listening on %s", cfg.Address)
 	log.Fatal(server.ListenAndServe())
 }

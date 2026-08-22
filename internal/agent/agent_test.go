@@ -61,6 +61,19 @@ func TestCommandEndpointIsRegisteredAndAuthenticated(t *testing.T) {
 	}
 }
 
+func TestLegacyRepositoryRoutesAreNotExposed(t *testing.T) {
+	s := NewServer(Config{APIToken: "test-token"})
+	for _, path := range []string{"/v1/repository/sync", "/v1/files/read", "/v1/git/commit-push", "/v1/github/release"} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+		req.Header.Set("Authorization", "Bearer test-token")
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("legacy route %s should not be exposed, got %d", path, rec.Code)
+		}
+	}
+}
+
 func TestDecodeJSONRejectsUnknownFieldsAndTrailingValues(t *testing.T) {
 	tests := []string{
 		`{"repo":"alice/demo","unexpected":true}`,
@@ -97,7 +110,7 @@ func TestHealthVersionMatchesOpenAPI(t *testing.T) {
 	if err := json.Unmarshal([]byte(openAPISpec), &spec); err != nil {
 		t.Fatal(err)
 	}
-	if spec.Info.Version != "0.2.3" {
+	if spec.Info.Version != "0.3.0" {
 		t.Fatalf("unexpected OpenAPI version: %s", spec.Info.Version)
 	}
 
@@ -234,7 +247,7 @@ func TestCommitPushMissingMessageDoesNotStageChanges(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/git/commit-push", strings.NewReader(`{"repo":"alice/demo"}`))
 	req.Header.Set("Authorization", "Bearer test-token")
 	rec := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rec, req)
+	s.auth(http.HandlerFunc(s.handleCommitPush)).ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d: %s", rec.Code, rec.Body.String())
 	}

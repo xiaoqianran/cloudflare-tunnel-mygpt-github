@@ -45,6 +45,27 @@ type hostCommandResult struct {
 	DurationMS int64  `json:"duration_ms"`
 }
 
+func commandEnv() []string {
+	env := append([]string{}, os.Environ()...)
+	// A root systemd service does not always inherit the same environment as an
+	// interactive root login. Pin the basic identity expected by common CLIs.
+	env = append(env,
+		"HOME=/root",
+		"USER=root",
+		"LOGNAME=root",
+		"SHELL=/bin/bash",
+	)
+
+	// gh prefers GH_TOKEN. Reuse a server-side GITHUB_TOKEN when one is already
+	// configured, without requiring the GPT to transmit GitHub credentials.
+	if strings.TrimSpace(os.Getenv("GH_TOKEN")) == "" {
+		if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" {
+			env = append(env, "GH_TOKEN="+token)
+		}
+	}
+	return env
+}
+
 func (s *Server) runHostCommand(ctx context.Context, command, workdir string, timeoutSeconds int) (hostCommandResult, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
@@ -53,11 +74,7 @@ func (s *Server) runHostCommand(ctx context.Context, command, workdir string, ti
 
 	dir := strings.TrimSpace(workdir)
 	if dir == "" {
-		var err error
-		dir, err = os.Getwd()
-		if err != nil {
-			return hostCommandResult{}, err
-		}
+		dir = "/root"
 	} else {
 		abs, err := filepath.Abs(dir)
 		if err != nil {
@@ -74,6 +91,9 @@ func (s *Server) runHostCommand(ctx context.Context, command, workdir string, ti
 	}
 
 	timeout := s.cfg.CommandTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Minute
+	}
 	if timeoutSeconds > 0 {
 		requested := time.Duration(timeoutSeconds) * time.Second
 		if requested < timeout {
@@ -83,10 +103,20 @@ func (s *Server) runHostCommand(ctx context.Context, command, workdir string, ti
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(commandCtx, "/bin/bash", "-lc", command)
+	// bash -l may rebuild PATH from root profile files, so prepend the common
+	// locations inside the executed shell as well as in the systemd unit. This
+	// covers Go, pip/uv-installed CLIs, Cargo, snap and normal system binaries.
+	const pathPrefix = "/root/.local/bin:/root/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
+	shellCommand := "export PATH=" + pathPrefix + ":\"$PATH\"; " + command
+	cmd := exec.CommandContext(commandCtx, "/bin/bash", "-lc", shellCommand)
 	cmd.Dir = dir
+	cmd.Env = commandEnv()
 	stdout := &cappedBuffer{limit: s.cfg.MaxCommandOutputChars}
 	stderr := &cappedBuffer{limit: s.cfg.MaxCommandOutputChars}
+	if stdout.limit < 1000 {
+		stdout.limit = 180000
+		stderr.limit = 180000
+	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	started := time.Now()
