@@ -277,17 +277,25 @@ func TestAsyncCommandExposesLiveOutput(t *testing.T) {
 	t.Fatal("job did not complete")
 }
 
-func TestExplicitTimeoutOverridesDefault(t *testing.T) {
+func TestExplicitTimeoutCannotExceedServerLimit(t *testing.T) {
+	s := NewServer(Config{CommandTimeout: time.Second, MaxCommandOutputChars: 20000})
+	_, err := s.runHostCommand(context.Background(), "printf done", t.TempDir(), "", 2)
+	if err == nil || !strings.Contains(err.Error(), "exceeds server limit") {
+		t.Fatalf("expected server timeout limit error, got %v", err)
+	}
+}
+
+func TestExplicitTimeoutCanShortenServerLimit(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not installed")
 	}
-	s := NewServer(Config{CommandTimeout: 50 * time.Millisecond, MaxCommandOutputChars: 20000})
-	result, err := s.runHostCommand(context.Background(), "sleep 0.2; printf done", t.TempDir(), "", 1)
+	s := NewServer(Config{CommandTimeout: 10 * time.Second, MaxCommandOutputChars: 20000})
+	result, err := s.runHostCommand(context.Background(), "sleep 2", t.TempDir(), "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.TimedOut || result.ExitCode != 0 || result.Stdout != "done" {
-		t.Fatalf("explicit timeout did not override default: %#v", result)
+	if !result.TimedOut || result.ExitCode == 0 {
+		t.Fatalf("explicit shorter timeout was not enforced: %#v", result)
 	}
 }
 
@@ -523,5 +531,94 @@ func TestOpenAPIExposesLongPollContract(t *testing.T) {
 		if !params[name] {
 			t.Fatalf("getCommandJob parameter %q missing from OpenAPI", name)
 		}
+	}
+}
+
+func TestAsyncCommandNonZeroExitIsFailed(t *testing.T) {
+	s := NewServer(Config{CommandTimeout: 3 * time.Second, MaxCommandOutputChars: 20000})
+	id, err := s.startJob(commandInput{Command: "printf boom >&2; exit 7", Workdir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		job, _, ok := s.getJob(id, 0)
+		if !ok {
+			t.Fatal("job disappeared")
+		}
+		if job.Status == "failed" {
+			if job.ExitCode == nil || *job.ExitCode != 7 || !strings.Contains(job.Stderr, "boom") {
+				t.Fatalf("unexpected failed job: %#v", job)
+			}
+			return
+		}
+		if job.Status != "running" {
+			t.Fatalf("non-zero command ended as %s: %#v", job.Status, job)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("non-zero command did not finish")
+}
+
+func TestTimeoutAboveServerLimitIsRejectedByHTTP(t *testing.T) {
+	s := NewServer(Config{APIToken: "test-token", CommandTimeout: time.Second, MaxCommandOutputChars: 20000})
+	for _, path := range []string{"/v1/command/run", "/v1/command/start"} {
+		body := strings.NewReader(`{"command":"true","timeout_seconds":2}`)
+		req := httptest.NewRequest(http.MethodPost, path, body)
+		req.Header.Set("Authorization", "Bearer test-token")
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "cannot exceed server limit") {
+			t.Fatalf("%s: expected timeout limit 400, got %d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestJobHistoryIsBoundedAndExpires(t *testing.T) {
+	now := time.Now().UTC()
+	store := newJobStore()
+	running := &commandJob{ID: "running", Status: "running", StartedAt: now, changed: make(chan struct{})}
+	store.jobs[running.ID] = running
+
+	for i := 0; i < maxJobHistory+40; i++ {
+		finished := now.Add(-time.Duration(i) * time.Minute)
+		id := "job-" + strconv.Itoa(i)
+		store.jobs[id] = &commandJob{ID: id, Status: "completed", FinishedAt: &finished, changed: make(chan struct{})}
+	}
+	expiredAt := now.Add(-jobRetention - time.Minute)
+	store.jobs["expired"] = &commandJob{ID: "expired", Status: "completed", FinishedAt: &expiredAt, changed: make(chan struct{})}
+
+	store.pruneLocked(now)
+	if _, ok := store.jobs["running"]; !ok {
+		t.Fatal("running job must never be evicted as history")
+	}
+	if _, ok := store.jobs["expired"]; ok {
+		t.Fatal("expired job was not pruned")
+	}
+	terminal := 0
+	for _, job := range store.jobs {
+		if job.FinishedAt != nil {
+			terminal++
+		}
+	}
+	if terminal != maxJobHistory {
+		t.Fatalf("terminal history=%d want=%d", terminal, maxJobHistory)
+	}
+	if _, ok := store.jobs["job-0"]; !ok {
+		t.Fatal("newest terminal job should be retained")
+	}
+}
+
+func TestNaturalExitResultIsNotReclassifiedAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := NewServer(Config{CommandTimeout: 3 * time.Second, MaxCommandOutputChars: 20000})
+	result, err := s.runHostCommand(ctx, "true", t.TempDir(), "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if result.cancelled || result.TimedOut || result.ExitCode != 0 {
+		t.Fatalf("natural exit was reclassified after cancellation: %#v", result)
 	}
 }

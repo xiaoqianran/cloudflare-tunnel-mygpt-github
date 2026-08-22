@@ -338,7 +338,7 @@ stdin
 - 配置片段；
 - CLI 的非交互输入。
 
-长任务应优先使用 `startCommand`。它立即返回 job id，不让 Cloudflare HTTP 请求等待命令结束；随后使用 `getCommandJob` 查询，必要时用 `cancelCommandJob` 取消。异步 Job 不绑定原始 HTTP request context，因此代理连接结束不会自动终止任务。已完成 Job 在内存中保留 24 小时；Agent 重启后会清空。更复杂的持久任务仍可交给 `systemd-run`、队列或云平台 Job。
+长任务应优先使用 `startCommand`。它立即返回 job id，不让 Cloudflare HTTP 请求等待命令结束；随后使用 `getCommandJob` 查询，必要时用 `cancelCommandJob` 取消。异步 Job 不绑定原始 HTTP request context，因此代理连接结束不会自动终止任务。终态 Job 最多保留 24 小时且最多保留最近 256 条；Agent 重启后会清空。更复杂的持久任务仍可交给 `systemd-run`、队列或云平台 Job。
 
 ## Agent 可以升级自己
 

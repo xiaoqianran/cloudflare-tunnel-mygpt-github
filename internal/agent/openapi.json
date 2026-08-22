@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Universal VPS Root Shell",
-    "version": "0.5.2",
+    "version": "0.5.3",
     "description": "A single authenticated action exposes the remote VPS root shell. It can use or install software as needed, read/write host files, run programs, manage services, call APIs, and compose arbitrary non-interactive workflows. Named tools are examples, never a capability boundary."
   },
   "servers": [
@@ -43,7 +43,7 @@
           "timeout_seconds": {
             "type": "integer",
             "minimum": 1,
-            "description": "Optional timeout for this workflow. When omitted, the server-side COMMAND_TIMEOUT_SECONDS default is used."
+            "description": "Optional per-workflow timeout in seconds. It may shorten but cannot exceed the server-side COMMAND_TIMEOUT_SECONDS limit."
           }
         },
         "required": [
@@ -65,7 +65,8 @@
               "failed",
               "cancelled",
               "timed_out"
-            ]
+            ],
+            "description": "completed means exit code 0; a non-zero command exit is failed. Cancellation and timeout have distinct terminal states."
           },
           "workdir": {
             "type": "string"

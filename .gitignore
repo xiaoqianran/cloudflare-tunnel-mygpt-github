@@ -5,7 +5,7 @@
 
 # Build output
 bin/
-mygpt-github-agent
+/mygpt-github-agent
 
 # Editor / OS
 .vscode/

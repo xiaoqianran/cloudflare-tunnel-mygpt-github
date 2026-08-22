@@ -12,7 +12,7 @@ func (s *Server) handleRunCommand(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if message := validateCommandInput(input); message != "" {
+	if message := s.validateCommandInput(input); message != "" {
 		writeError(w, http.StatusBadRequest, message)
 		return
 	}

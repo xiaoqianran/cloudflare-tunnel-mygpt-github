@@ -14,6 +14,7 @@ import (
 
 const (
 	jobRetention        = 24 * time.Hour
+	maxJobHistory       = 256
 	defaultJobWait      = 10 * time.Second
 	maxJobWait          = 20 * time.Second
 	defaultJobTailChars = 12000
@@ -113,19 +114,23 @@ func (s *Server) startJob(input commandInput) (string, error) {
 			job.Status = "failed"
 			job.Error = err.Error()
 			s.signalJobLocked(job)
+			s.jobs.pruneLocked(finished)
 			return
 		}
 		job.result = &result
 		job.Workdir = result.Workdir
 		switch {
-		case ctx.Err() == context.Canceled:
+		case result.cancelled:
 			job.Status = "cancelled"
 		case result.TimedOut:
 			job.Status = "timed_out"
+		case result.ExitCode != 0:
+			job.Status = "failed"
 		default:
 			job.Status = "completed"
 		}
 		s.signalJobLocked(job)
+		s.jobs.pruneLocked(finished)
 	}()
 	return id, nil
 }
@@ -145,18 +150,44 @@ func (s *Server) signalJobLocked(job *commandJob) {
 }
 
 func (j *jobStore) pruneLocked(now time.Time) {
+	terminal := 0
 	for id, job := range j.jobs {
-		if job.FinishedAt != nil && now.Sub(*job.FinishedAt) > jobRetention {
-			delete(j.jobs, id)
+		if job.FinishedAt == nil {
+			continue
 		}
+		if now.Sub(*job.FinishedAt) > jobRetention {
+			delete(j.jobs, id)
+			continue
+		}
+		terminal++
+	}
+
+	for terminal > maxJobHistory {
+		oldestID := ""
+		var oldest time.Time
+		for id, job := range j.jobs {
+			if job.FinishedAt == nil {
+				continue
+			}
+			if oldestID == "" || job.FinishedAt.Before(oldest) {
+				oldestID = id
+				oldest = *job.FinishedAt
+			}
+		}
+		if oldestID == "" {
+			return
+		}
+		delete(j.jobs, oldestID)
+		terminal--
 	}
 }
 
 func (s *Server) getJob(id string, tailChars int) (commandJobView, <-chan struct{}, bool) {
-	s.jobs.mu.RLock()
+	s.jobs.mu.Lock()
+	s.jobs.pruneLocked(time.Now().UTC())
 	job, ok := s.jobs.jobs[id]
 	if !ok {
-		s.jobs.mu.RUnlock()
+		s.jobs.mu.Unlock()
 		return commandJobView{}, nil, false
 	}
 	view := commandJobView{
@@ -172,7 +203,7 @@ func (s *Server) getJob(id string, tailChars int) (commandJobView, <-chan struct
 	stdout := job.stdout
 	stderr := job.stderr
 	changed := job.changed
-	s.jobs.mu.RUnlock()
+	s.jobs.mu.Unlock()
 
 	view.Stdout, view.Truncated = stdout.tail(tailChars)
 	stderrText, stderrTruncated := stderr.tail(tailChars)
@@ -191,26 +222,30 @@ func (s *Server) getJob(id string, tailChars int) (commandJobView, <-chan struct
 }
 
 func (s *Server) cancelJob(id string) (string, bool) {
-	s.jobs.mu.RLock()
+	s.jobs.mu.Lock()
+	s.jobs.pruneLocked(time.Now().UTC())
 	job, ok := s.jobs.jobs[id]
 	if !ok {
-		s.jobs.mu.RUnlock()
+		s.jobs.mu.Unlock()
 		return "", false
 	}
 	cancel := job.cancel
-	s.jobs.mu.RUnlock()
+	s.jobs.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
 	return id, true
 }
 
-func validateCommandInput(input commandInput) string {
+func (s *Server) validateCommandInput(input commandInput) string {
 	if strings.TrimSpace(input.Command) == "" {
 		return "command is required"
 	}
 	if input.TimeoutSeconds < 0 {
 		return "timeout_seconds must be positive"
+	}
+	if time.Duration(input.TimeoutSeconds)*time.Second > s.commandTimeoutLimit() {
+		return fmt.Sprintf("timeout_seconds cannot exceed server limit of %s", s.commandTimeoutLimit())
 	}
 	return ""
 }
@@ -259,7 +294,7 @@ func (s *Server) handleStartCommand(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if message := validateCommandInput(input); message != "" {
+	if message := s.validateCommandInput(input); message != "" {
 		writeError(w, http.StatusBadRequest, message)
 		return
 	}

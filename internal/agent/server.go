@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const apiVersion = "0.5.2"
+const apiVersion = "0.5.3"
 const maxRequestBodyBytes = 16 << 20
 
 type Server struct {

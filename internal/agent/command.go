@@ -91,6 +91,7 @@ type hostCommandResult struct {
 	TimedOut   bool   `json:"timed_out"`
 	Truncated  bool   `json:"truncated"`
 	DurationMS int64  `json:"duration_ms"`
+	cancelled  bool
 }
 
 func commandEnv() []string {
@@ -121,6 +122,14 @@ func commandEnv() []string {
 		env = append(env, key+"="+values[key])
 	}
 	return env
+}
+
+func (s *Server) commandTimeoutLimit() time.Duration {
+	timeout := s.cfg.CommandTimeout
+	if timeout <= 0 {
+		return 30 * time.Minute
+	}
+	return timeout
 }
 
 func (s *Server) runHostCommand(ctx context.Context, command, workdir, stdin string, timeoutSeconds int) (hostCommandResult, error) {
@@ -159,12 +168,13 @@ func (s *Server) runHostCommandTo(ctx context.Context, command, workdir, stdin s
 		return hostCommandResult{}, fmt.Errorf("workdir is not a directory: %s", dir)
 	}
 
-	timeout := s.cfg.CommandTimeout
-	if timeout <= 0 {
-		timeout = 30 * time.Minute
-	}
+	timeout := s.commandTimeoutLimit()
 	if timeoutSeconds > 0 {
-		timeout = time.Duration(timeoutSeconds) * time.Second
+		requested := time.Duration(timeoutSeconds) * time.Second
+		if requested > timeout {
+			return hostCommandResult{}, fmt.Errorf("timeout_seconds exceeds server limit of %s", timeout)
+		}
+		timeout = requested
 	}
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -199,10 +209,12 @@ func (s *Server) runHostCommandTo(ctx context.Context, command, workdir, stdin s
 
 	var runErr error
 	timedOut := false
+	cancelled := false
 	select {
 	case runErr = <-waitCh:
 	case <-commandCtx.Done():
 		timedOut = errors.Is(commandCtx.Err(), context.DeadlineExceeded)
+		cancelled = errors.Is(commandCtx.Err(), context.Canceled)
 		if cmd.Process != nil {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
@@ -219,7 +231,7 @@ func (s *Server) runHostCommandTo(ctx context.Context, command, workdir, stdin s
 			exitCode = -1
 		}
 	}
-	if commandCtx.Err() != nil && exitCode == 0 {
+	if (timedOut || cancelled) && exitCode == 0 {
 		exitCode = -1
 	}
 
@@ -233,5 +245,6 @@ func (s *Server) runHostCommandTo(ctx context.Context, command, workdir, stdin s
 		TimedOut:   timedOut,
 		Truncated:  stdoutTruncated || stderrTruncated,
 		DurationMS: duration.Milliseconds(),
+		cancelled:  cancelled,
 	}, nil
 }

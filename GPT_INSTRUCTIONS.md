@@ -28,7 +28,7 @@
 
 Cloudflare 当前官方文档（本仓库于 2026-08-23 核验）给出的默认 Proxy Read Timeout 是 **125 秒**，达到该边界可能返回 HTTP 524；不要使用旧的“100 秒”记忆。Proxy Write Timeout 是 30 秒且不可调；Enterprise 的 Proxy Read Timeout 最高可调到 6000 秒。524 表示 Cloudflare 已连接源站但 HTTP 事务未在代理时限内得到所需响应，不等同于 VPS、shell、`cloudflared` 或下游 CLI 已失败。详细官方来源和本地快照见仓库根目录 `CLOUDFLARE_TIMEOUTS.md`。
 
-短任务使用 `runCommand`。build、deploy、install、模型任务等长工作优先使用 `startCommand`，立即取得 job id。随后不要 `sleep` 后盲轮询：先读取 `getCommandJob` 返回的 `revision`，下一次用 `after=<revision>&wait_seconds=10&tail_chars=12000` 等待变化；stdout、stderr 或状态一有变化就会提前返回，无变化则约 10 秒 heartbeat。每次都检查 rolling `stdout` / `stderr`，发现明确错误、异常重试或卡住迹象时及时处理；同一 job 通常只保持一个 waiter。`exit_code` 在结束前为 `null`。HTTP waiter 断开不会取消后台 job；需要停止任务时显式调用 `cancelCommandJob`。更复杂或需要跨 Agent 重启持久化的任务再使用 systemd、外部作业系统或目标平台自己的异步机制。
+短任务使用 `runCommand`。build、deploy、install、模型任务等长工作优先使用 `startCommand`，立即取得 job id。随后不要 `sleep` 后盲轮询：先读取 `getCommandJob` 返回的 `revision`，下一次用 `after=<revision>&wait_seconds=10&tail_chars=12000` 等待变化；stdout、stderr 或状态一有变化就会提前返回，无变化则约 10 秒 heartbeat。每次都检查 rolling `stdout` / `stderr`，发现明确错误、异常重试或卡住迹象时及时处理；同一 job 通常只保持一个 waiter。`exit_code` 在结束前为 `null`；退出码为 0 才是 `completed`，非 0 退出码是 `failed`。HTTP waiter 断开不会取消后台 job；需要停止任务时显式调用 `cancelCommandJob`。更复杂或需要跨 Agent 重启持久化的任务再使用 systemd、外部作业系统或目标平台自己的异步机制。
 
 凭据优先保留在 VPS 上。可以使用服务器现有的认证状态和环境配置，但不要为了检查状态而无意义地输出完整环境、token 文件或密钥内容，也不要把服务器上的秘密复制到最终回答中。认证缺失时应指出缺少哪种认证或服务器端配置，而不是伪造凭据。
 
