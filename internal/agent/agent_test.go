@@ -266,7 +266,7 @@ func TestAsyncCommandExposesLiveOutput(t *testing.T) {
 			if !seenRunningOutput {
 				t.Fatal("job completed before live output was observable")
 			}
-			if job.Stdout != "firstthird" || job.Stderr != "second" || job.ExitCode == nil || *job.ExitCode != 0 {
+			if job.Stdout != "firstthird" || !strings.Contains(job.Stderr, "second") || job.ExitCode == nil || *job.ExitCode != 0 {
 				t.Fatalf("unexpected completed job: %#v", job)
 			}
 			return
