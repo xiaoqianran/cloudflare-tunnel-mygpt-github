@@ -66,6 +66,9 @@ func TestOpenAPIExposesUniversalConsequentialRunCommand(t *testing.T) {
 			Version     string `json:"version"`
 			Description string `json:"description"`
 		} `json:"info"`
+		Components struct {
+			Schemas map[string]any `json:"schemas"`
+		} `json:"components"`
 		Paths map[string]map[string]struct {
 			OperationID     string `json:"operationId"`
 			IsConsequential *bool  `json:"x-openai-isConsequential"`
@@ -77,6 +80,12 @@ func TestOpenAPIExposesUniversalConsequentialRunCommand(t *testing.T) {
 	}
 	if spec.Info.Version != apiVersion {
 		t.Fatalf("OpenAPI version %q does not match code version %q", spec.Info.Version, apiVersion)
+	}
+	if spec.Components.Schemas == nil {
+		t.Fatal("components.schemas must be an object, even when empty")
+	}
+	if len(spec.Info.Description) > 300 {
+		t.Fatalf("OpenAPI info description exceeds Builder limit: %d", len(spec.Info.Description))
 	}
 	if len(spec.Paths) != 1 {
 		t.Fatalf("expected exactly one action path, got %d", len(spec.Paths))
@@ -92,7 +101,10 @@ func TestOpenAPIExposesUniversalConsequentialRunCommand(t *testing.T) {
 	if op.IsConsequential == nil || !*op.IsConsequential {
 		t.Fatal("root shell action must be explicitly consequential")
 	}
-	for _, phrase := range []string{"install", "arbitrary workflows", "not a capability boundary"} {
+	if len(op.Description) > 300 {
+		t.Fatalf("runCommand description exceeds Builder limit: %d", len(op.Description))
+	}
+	for _, phrase := range []string{"install", "workflow", "not a capability boundary"} {
 		combined := strings.ToLower(spec.Info.Description + " " + op.Description)
 		if !strings.Contains(combined, phrase) {
 			t.Fatalf("OpenAPI should communicate universal capability; missing %q", phrase)

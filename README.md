@@ -87,6 +87,17 @@ curl -fsSL https://example.com/install.sh | bash
 
 它具有真实系统副作用，不应伪装成只读或非 consequential 操作。
 
+## OpenAPI 与 GPT 指令的职责边界
+
+OpenAPI 刻意保持简短。它只描述认证、`runCommand` 的输入输出和真实副作用，不承担“教模型如何规划工作流”的职责。Custom GPT Builder 对 schema 结构和 description 长度有额外约束，因此复杂的能力说明放在 [`GPT_INSTRUCTIONS.md`](./GPT_INSTRUCTIONS.md)，而不是不断扩张 operation description。
+
+当前兼容约束包括：
+
+- `components.schemas` 始终显式为 `{}`，即使暂时没有复用 schema。
+- OpenAPI 中关键 `description` 保持在 300 字符以内。
+- Action 面始终只有 `runCommand`；“缺工具就安装、按目标组合任意工作流”的行为策略由 GPT 指令表达。
+- CI 对上述约束做回归测试，避免 Builder 导入在后续修改中再次失效。
+
 ## Action 请求
 
 ```json

@@ -2,23 +2,36 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Universal VPS Root Shell",
-    "version": "0.4.0",
-    "description": "One authenticated action gives the model a general-purpose root shell on the remote VPS. The model can use the host's existing capabilities, install additional packages, runtimes or CLIs when needed, create scripts, manage files and services, call remote APIs, and compose arbitrary non-interactive workflows that the server can execute. Named tools are examples, not a capability boundary."
+    "version": "0.4.1",
+    "description": "A single authenticated action exposes the remote VPS root shell. It can use or install software as needed, read/write host files, run programs, manage services, call APIs, and compose arbitrary non-interactive workflows. Named tools are examples, never a capability boundary."
   },
-  "servers": [{"url": "__SERVER_URL__"}],
-  "security": [{"BearerAuth": []}],
+  "servers": [
+    {
+      "url": "__SERVER_URL__"
+    }
+  ],
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
   "components": {
     "securitySchemes": {
-      "BearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "opaque"}
-    }
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque"
+      }
+    },
+    "schemas": {}
   },
   "paths": {
     "/v1/command/run": {
       "post": {
         "operationId": "runCommand",
         "x-openai-isConsequential": true,
-        "summary": "Execute an arbitrary root shell workflow on the remote VPS",
-        "description": "Universal host execution primitive. Runs a command or multiline shell script with /bin/bash -lc as root on the real VPS, not in a repository sandbox. It may inspect or change the operating system, install any required software or CLI through available package managers or installers, read/write files anywhere root can access, build and run programs, manage services and processes, use credentials already configured on the server, call APIs and cloud platforms, and chain these abilities into arbitrary workflows. Do not infer a fixed tool allowlist from examples: if a required capability is missing, the shell may install or bootstrap it first. Commands are non-interactive, output is capped, and execution is timeout-limited.",
+        "summary": "Run a root shell workflow on the remote VPS",
+        "description": "Runs any non-interactive shell workflow as root via /bin/bash -lc on the real VPS. It may use or install software as needed, access host files and services, call APIs, and combine tools freely. Installed tools and examples are not a capability boundary.",
         "requestBody": {
           "required": true,
           "content": {
@@ -45,16 +58,26 @@
                     "description": "Optional timeout for this call. It may shorten, but cannot exceed, the server-side COMMAND_TIMEOUT_SECONDS limit."
                   }
                 },
-                "required": ["command"]
+                "required": [
+                  "command"
+                ]
               }
             }
           }
         },
         "responses": {
-          "200": {"description": "Workflow finished. Inspect exit_code, stdout, stderr, timed_out and truncated before deciding the next step."},
-          "400": {"description": "Invalid request."},
-          "401": {"description": "Missing or invalid Bearer token."},
-          "500": {"description": "The shell could not be started or the requested workdir is unavailable."}
+          "200": {
+            "description": "Workflow finished. Inspect exit_code, stdout, stderr, timed_out and truncated before deciding the next step."
+          },
+          "400": {
+            "description": "Invalid request."
+          },
+          "401": {
+            "description": "Missing or invalid Bearer token."
+          },
+          "500": {
+            "description": "The shell could not be started or the requested workdir is unavailable."
+          }
         }
       }
     }
