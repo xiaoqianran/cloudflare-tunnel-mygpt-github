@@ -12,15 +12,16 @@ import (
 	"time"
 )
 
-const apiVersion = "0.4.1"
+const apiVersion = "0.5.0"
 const maxRequestBodyBytes = 16 << 20
 
 type Server struct {
-	cfg Config
+	cfg  Config
+	jobs *jobStore
 }
 
 func NewServer(cfg Config) *Server {
-	return &Server{cfg: cfg}
+	return &Server{cfg: cfg, jobs: newJobStore()}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -28,6 +29,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /openapi.json", s.handleOpenAPI)
 	mux.Handle("POST /v1/command/run", s.CommandEndpoint())
+	mux.Handle("POST /v1/command/start", s.auth(http.HandlerFunc(s.handleStartCommand)))
+	mux.Handle("GET /v1/command/jobs/{id}", s.auth(http.HandlerFunc(s.handleGetCommandJob)))
+	mux.Handle("POST /v1/command/jobs/{id}/cancel", s.auth(http.HandlerFunc(s.handleCancelCommandJob)))
 	return requestLogger(mux)
 }
 

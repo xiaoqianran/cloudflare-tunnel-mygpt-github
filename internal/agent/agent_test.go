@@ -55,8 +55,12 @@ func TestCappedBuffer(t *testing.T) {
 	if n, err := buf.Write([]byte("abcdefgh")); err != nil || n != 8 {
 		t.Fatalf("unexpected write result: n=%d err=%v", n, err)
 	}
-	if buf.String() != "abcde" || !buf.truncated {
+	if buf.String() != "defgh" || !buf.truncated {
 		t.Fatalf("unexpected capped output: %q truncated=%v", buf.String(), buf.truncated)
+	}
+	_, _ = buf.Write([]byte("ij"))
+	if buf.String() != "fghij" {
+		t.Fatalf("capped output should retain the tail: %q", buf.String())
 	}
 }
 
@@ -87,8 +91,8 @@ func TestOpenAPIExposesUniversalNonConsequentialRunCommand(t *testing.T) {
 	if len(spec.Info.Description) > 300 {
 		t.Fatalf("OpenAPI info description exceeds Builder limit: %d", len(spec.Info.Description))
 	}
-	if len(spec.Paths) != 1 {
-		t.Fatalf("expected exactly one action path, got %d", len(spec.Paths))
+	if len(spec.Paths) != 4 {
+		t.Fatalf("expected four action paths, got %d", len(spec.Paths))
 	}
 	methods, ok := spec.Paths["/v1/command/run"]
 	if !ok {
@@ -100,6 +104,20 @@ func TestOpenAPIExposesUniversalNonConsequentialRunCommand(t *testing.T) {
 	}
 	if op.IsConsequential == nil || *op.IsConsequential {
 		t.Fatal("runCommand action must be explicitly non-consequential to avoid per-call confirmation prompts")
+	}
+	for path, operationID := range map[string]string{
+		"/v1/command/start":            "startCommand",
+		"/v1/command/jobs/{id}":        "getCommandJob",
+		"/v1/command/jobs/{id}/cancel": "cancelCommandJob",
+	} {
+		methods := spec.Paths[path]
+		var got string
+		for _, candidate := range methods {
+			got = candidate.OperationID
+		}
+		if got != operationID {
+			t.Fatalf("unexpected operation for %s: %q", path, got)
+		}
 	}
 	if len(op.Description) > 300 {
 		t.Fatalf("runCommand description exceeds Builder limit: %d", len(op.Description))
@@ -163,4 +181,104 @@ func TestHostCommandTimeoutKillsWorkflow(t *testing.T) {
 	if time.Since(started) > 4*time.Second {
 		t.Fatalf("timeout did not terminate workflow promptly: %s", time.Since(started))
 	}
+}
+
+func TestAsyncCommandCompletes(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not installed")
+	}
+	s := NewServer(Config{CommandTimeout: 10 * time.Second, MaxCommandOutputChars: 20000})
+	id, err := s.startJob(commandInput{Command: "printf done", Workdir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		got, ok := s.getJob(id)
+		if !ok {
+			t.Fatal("job disappeared")
+		}
+		if got.Status == "completed" {
+			if got.Result == nil || got.Result.ExitCode != 0 || got.Result.Stdout != "done" {
+				t.Fatalf("unexpected result: %#v", got.Result)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("job did not complete")
+}
+
+func TestAsyncCommandCanBeCancelled(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not installed")
+	}
+	s := NewServer(Config{CommandTimeout: 10 * time.Second, MaxCommandOutputChars: 20000})
+	id, err := s.startJob(commandInput{Command: "sleep 10", Workdir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.cancelJob(id); !ok {
+		t.Fatal("job not found")
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		got, _ := s.getJob(id)
+		if got.Status == "cancelled" {
+			if got.Result == nil || got.Result.ExitCode == 0 {
+				t.Fatalf("unexpected cancelled result: %#v", got.Result)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("job was not cancelled")
+}
+
+func TestExplicitTimeoutOverridesDefault(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not installed")
+	}
+	s := NewServer(Config{CommandTimeout: 50 * time.Millisecond, MaxCommandOutputChars: 20000})
+	result, err := s.runHostCommand(context.Background(), "sleep 0.2; printf done", t.TempDir(), "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TimedOut || result.ExitCode != 0 || result.Stdout != "done" {
+		t.Fatalf("explicit timeout did not override default: %#v", result)
+	}
+}
+
+func TestAsyncCommandHTTPFlow(t *testing.T) {
+	s := NewServer(Config{APIToken: "test-token", CommandTimeout: time.Second, MaxCommandOutputChars: 20000})
+	h := s.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/command/start", strings.NewReader(`{"command":"printf done"}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("start status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var started struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &started); err != nil || started.ID == "" {
+		t.Fatalf("invalid start response: %s", rec.Body.String())
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		req = httptest.NewRequest(http.MethodGet, "/v1/command/jobs/"+started.ID, nil)
+		req.Header.Set("Authorization", "Bearer test-token")
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if strings.Contains(rec.Body.String(), `"status":"completed"`) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("job did not complete through HTTP API")
 }

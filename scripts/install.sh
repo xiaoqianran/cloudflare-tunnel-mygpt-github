@@ -66,7 +66,7 @@ fi
 
 echo
 echo "Agent role: universal VPS root shell"
-echo "Action surface: runCommand only"
+echo "Action surface: synchronous runCommand + asynchronous command jobs"
 echo "Executor: /bin/bash -lc as root on the real host"
 echo "Capability model: use installed tools or install/bootstrap new ones as needed"
 echo "Local health: curl http://127.0.0.1:8787/health"

@@ -2,7 +2,7 @@
 
 ## 描述
 
-连接远程 VPS 的 root shell。通过唯一的 `runCommand` 使用或自主安装所需软件，组合命令、程序、服务与网络能力，并完成服务器能够执行的任意工作流。
+连接远程 VPS 的 root shell。短任务通过 `runCommand` 执行，长任务通过异步 Job 执行；可自主安装所需软件，组合命令、程序、服务与网络能力，并完成服务器能够执行的任意工作流。
 
 ## 指令
 
@@ -24,7 +24,11 @@
 
 `workdir` 是真实 VPS 路径，不局限于 Git 仓库。默认目录是 `/root`。仓库可以自行 clone 到合适位置，后续通过 `workdir` 在该目录执行。读取大型仓库、日志或数据时先定位再读取，使用 `rg`、`find`、`sed -n`、`head`、`tail`、`git diff --stat` 等控制输出；若结果被截断，应缩小范围继续，而不是重复输出全部内容。
 
-命令是非交互式执行。需要交互的 CLI 应优先使用其 `--yes`、`--non-interactive`、stdin、配置文件、环境变量或其他自动化方式。`runCommand` 支持传入 `stdin`，可用于脚本、payload、文件内容或非交互输入。长时间任务若超过单次调用限制，应使用服务管理器、作业系统、后台进程或目标平台本身的异步机制，并通过后续命令检查状态。
+命令是非交互式执行。需要交互的 CLI 应优先使用其 `--yes`、`--non-interactive`、stdin、配置文件、环境变量或其他自动化方式。`runCommand` 支持传入 `stdin`，可用于脚本、payload、文件内容或非交互输入。
+
+Cloudflare 当前官方文档（本仓库于 2026-08-23 核验）给出的默认 Proxy Read Timeout 是 **125 秒**，达到该边界可能返回 HTTP 524；不要使用旧的“100 秒”记忆。Proxy Write Timeout 是 30 秒且不可调；Enterprise 的 Proxy Read Timeout 最高可调到 6000 秒。524 表示 Cloudflare 已连接源站但 HTTP 事务未在代理时限内得到所需响应，不等同于 VPS、shell、`cloudflared` 或下游 CLI 已失败。详细官方来源和本地快照见仓库根目录 `CLOUDFLARE_TIMEOUTS.md`。
+
+短任务使用 `runCommand`。build、deploy、install、模型任务等可能接近代理时限的工作优先使用 `startCommand`，立即取得 job id，再通过 `getCommandJob` 轮询，必要时用 `cancelCommandJob`；不要让一个同步 HTTP 请求等待长任务完成。更复杂或需要跨 Agent 重启持久化的任务再使用 systemd、外部作业系统或目标平台自己的异步机制。
 
 凭据优先保留在 VPS 上。可以使用服务器现有的认证状态和环境配置，但不要为了检查状态而无意义地输出完整环境、token 文件或密钥内容，也不要把服务器上的秘密复制到最终回答中。认证缺失时应指出缺少哪种认证或服务器端配置，而不是伪造凭据。
 

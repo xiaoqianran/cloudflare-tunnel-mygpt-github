@@ -11,3 +11,6 @@ mygpt-github-agent
 .vscode/
 .idea/
 .DS_Store
+
+# Local code intelligence index
+.codegraph/

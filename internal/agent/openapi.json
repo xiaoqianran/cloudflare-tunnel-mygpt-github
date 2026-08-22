@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Universal VPS Root Shell",
-    "version": "0.4.1",
+    "version": "0.5.0",
     "description": "A single authenticated action exposes the remote VPS root shell. It can use or install software as needed, read/write host files, run programs, manage services, call APIs, and compose arbitrary non-interactive workflows. Named tools are examples, never a capability boundary."
   },
   "servers": [
@@ -23,7 +23,34 @@
         "bearerFormat": "opaque"
       }
     },
-    "schemas": {}
+    "schemas": {
+      "CommandInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Any shell command or multiline script to execute with /bin/bash -lc. Multiple dependent steps may be combined into one script."
+          },
+          "workdir": {
+            "type": "string",
+            "description": "Optional absolute or relative host working directory. Defaults to /root. It is not restricted to a repository workspace."
+          },
+          "stdin": {
+            "type": "string",
+            "description": "Optional standard input passed to the command. Useful for non-interactive CLI input, scripts, payloads and file content."
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional timeout for this workflow. When omitted, the server-side COMMAND_TIMEOUT_SECONDS default is used."
+          }
+        },
+        "required": [
+          "command"
+        ]
+      }
+    }
   },
   "paths": {
     "/v1/command/run": {
@@ -31,36 +58,13 @@
         "operationId": "runCommand",
         "x-openai-isConsequential": false,
         "summary": "Run a root shell workflow on the remote VPS",
-        "description": "Runs any non-interactive shell workflow as root via /bin/bash -lc on the real VPS. It may use or install software as needed, access host files and services, call APIs, and combine tools freely. Installed tools and examples are not a capability boundary.",
+        "description": "Runs any non-interactive root shell workflow via /bin/bash -lc; installed tools are not a capability boundary. Use for short commands. Cloudflare currently documents a 125-second default Proxy Read Timeout; prefer startCommand for long work to avoid HTTP 524.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "command": {
-                    "type": "string",
-                    "description": "Any shell command or multiline script to execute with /bin/bash -lc. Multiple dependent steps may be combined into one script."
-                  },
-                  "workdir": {
-                    "type": "string",
-                    "description": "Optional absolute or relative host working directory. Defaults to /root. It is not restricted to a repository workspace."
-                  },
-                  "stdin": {
-                    "type": "string",
-                    "description": "Optional standard input passed to the command. Useful for non-interactive CLI input, scripts, payloads and file content."
-                  },
-                  "timeout_seconds": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Optional timeout for this call. It may shorten, but cannot exceed, the server-side COMMAND_TIMEOUT_SECONDS limit."
-                  }
-                },
-                "required": [
-                  "command"
-                ]
+                "$ref": "#/components/schemas/CommandInput"
               }
             }
           }
@@ -77,6 +81,93 @@
           },
           "500": {
             "description": "The shell could not be started or the requested workdir is unavailable."
+          }
+        }
+      }
+    },
+    "/v1/command/start": {
+      "post": {
+        "operationId": "startCommand",
+        "x-openai-isConsequential": false,
+        "summary": "Start a long-running root shell workflow",
+        "description": "Starts a root shell workflow independently of the HTTP request and immediately returns a job id. Prefer for work that may approach Cloudflare's documented 125-second default Proxy Read Timeout; poll with getCommandJob.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Job accepted. Use getCommandJob to poll until it reaches a terminal state."
+          },
+          "400": {
+            "description": "Invalid request."
+          },
+          "401": {
+            "description": "Missing or invalid Bearer token."
+          }
+        }
+      }
+    },
+    "/v1/command/jobs/{id}": {
+      "get": {
+        "operationId": "getCommandJob",
+        "x-openai-isConsequential": false,
+        "summary": "Get an asynchronous command job",
+        "description": "Returns job status and, once finished, the same command result fields as runCommand.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current job state."
+          },
+          "401": {
+            "description": "Missing or invalid Bearer token."
+          },
+          "404": {
+            "description": "Job not found."
+          }
+        }
+      }
+    },
+    "/v1/command/jobs/{id}/cancel": {
+      "post": {
+        "operationId": "cancelCommandJob",
+        "x-openai-isConsequential": false,
+        "summary": "Cancel an asynchronous command job",
+        "description": "Requests cancellation of a running job and its process group. Completed jobs are left unchanged.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Cancellation request accepted."
+          },
+          "401": {
+            "description": "Missing or invalid Bearer token."
+          },
+          "404": {
+            "description": "Job not found."
           }
         }
       }

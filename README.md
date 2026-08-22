@@ -4,11 +4,11 @@
 
 > **中文完整文档：** [`README.zh-CN.md`](./README.zh-CN.md) · **Custom GPT 指令：** [`GPT_INSTRUCTIONS.md`](./GPT_INSTRUCTIONS.md)
 
-把 Custom GPT 连接到一台真实 VPS 的 **通用 root shell**。整个 Action 面只有一个操作：`runCommand`。
+把 Custom GPT 连接到一台真实 VPS 的 **通用 root shell**。Action 面保留同步 `runCommand`，并为长任务提供异步 `startCommand` / `getCommandJob` / `cancelCommandJob`。
 
 它不是 GitHub 工具集合，也不是预装 CLI 的固定能力列表。模型可以直接使用服务器已有能力；缺什么，就通过 root shell 安装什么，然后继续组合完成工作流。
 
-> **推荐 GPT 描述**：连接远程 VPS 的 root shell。通过唯一的 `runCommand` 使用或自主安装所需软件，组合命令、程序、服务与网络能力，并完成服务器能够执行的任意工作流。
+> **推荐 GPT 描述**：连接远程 VPS 的 root shell。通过 `runCommand`（短任务）或异步 Job（长任务）使用或自主安装所需软件，组合命令、程序、服务与网络能力，并完成服务器能够执行的任意工作流。
 
 可直接粘贴到 GPT Builder 的完整指令见 [`GPT_INSTRUCTIONS.md`](./GPT_INSTRUCTIONS.md)。
 
@@ -38,12 +38,15 @@ Universal VPS Root Shell Agent (systemd, root)
 
 ## 设计原则
 
-### 一个 Action，而不是一堆专用 API
+### 一个执行原语，两种生命周期
 
-OpenAPI 只公开：
+OpenAPI 只围绕一个执行原语公开同步与异步生命周期：
 
 ```text
 POST /v1/command/run
+POST /v1/command/start
+GET  /v1/command/jobs/{id}
+POST /v1/command/jobs/{id}/cancel
 ```
 
 过去的 `syncRepository`、`readFiles`、`applyChanges`、`gitDiff`、`commitAndPush`、`createRelease` 等专用 API 已从代码中删除。
@@ -93,14 +96,20 @@ curl -fsSL https://example.com/install.sh | bash
 
 ## OpenAPI 与 GPT 指令的职责边界
 
-OpenAPI 刻意保持简短。它只描述认证、`runCommand` 的输入输出和真实副作用，不承担“教模型如何规划工作流”的职责。Custom GPT Builder 对 schema 结构和 description 长度有额外约束，因此复杂的能力说明放在 [`GPT_INSTRUCTIONS.md`](./GPT_INSTRUCTIONS.md)，而不是不断扩张 operation description。
+OpenAPI 刻意保持简短。它只描述认证、命令执行的同步/异步生命周期、输入输出和真实副作用，不承担“教模型如何规划工作流”的职责。Custom GPT Builder 对 schema 结构和 description 长度有额外约束，因此复杂的能力说明放在 [`GPT_INSTRUCTIONS.md`](./GPT_INSTRUCTIONS.md)，而不是不断扩张 operation description。
 
 当前兼容约束包括：
 
 - `components.schemas` 始终显式为 `{}`，即使暂时没有复用 schema。
 - OpenAPI 中关键 `description` 保持在 300 字符以内。
-- Action 面始终只有 `runCommand`；“缺工具就安装、按目标组合任意工作流”的行为策略由 GPT 指令表达。
+- Action 面只提供同一个 shell 执行原语的同步与异步生命周期；“缺工具就安装、按目标组合任意工作流”的行为策略由 GPT 指令表达。
 - CI 对上述约束做回归测试，避免 Builder 导入在后续修改中再次失效。
+
+## 长任务与 524
+
+> Cloudflare 当前超时事实、官方来源与下载快照见 [`CLOUDFLARE_TIMEOUTS.md`](./CLOUDFLARE_TIMEOUTS.md)。默认 Proxy Read Timeout 当前为 **125 秒**，不要使用旧的 100 秒记忆。
+
+短任务使用 `runCommand`。可能持续较久的 build、deploy、install 等任务使用 `startCommand`，它会立即返回 job id；随后用 `getCommandJob` 轮询，必要时用 `cancelCommandJob` 取消。Job 使用独立 context，不绑定原始 HTTP 请求，因此 Cloudflare 请求超时不会成为任务生命周期。已完成 Job 在内存中保留 24 小时；Agent 重启后会清空。
 
 ## Action 请求
 

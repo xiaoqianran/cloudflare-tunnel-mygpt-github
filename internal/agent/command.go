@@ -23,18 +23,24 @@ type cappedBuffer struct {
 }
 
 func (w *cappedBuffer) Write(p []byte) (int, error) {
-	original := len(p)
-	remaining := w.limit - w.buf.Len()
-	if remaining > 0 {
-		if len(p) > remaining {
-			p = p[:remaining]
-			w.truncated = true
-		}
-		_, _ = w.buf.Write(p)
-	} else if len(p) > 0 {
+	n := len(p)
+	if n == 0 {
+		return 0, nil
+	}
+	if len(p) >= w.limit {
+		w.buf.Reset()
+		_, _ = w.buf.Write(p[len(p)-w.limit:])
+		w.truncated = true
+		return n, nil
+	}
+	if overflow := w.buf.Len() + len(p) - w.limit; overflow > 0 {
+		b := w.buf.Bytes()
+		copy(b, b[overflow:])
+		w.buf.Truncate(len(b) - overflow)
 		w.truncated = true
 	}
-	return original, nil
+	_, _ = w.buf.Write(p)
+	return n, nil
 }
 
 func (w *cappedBuffer) String() string { return w.buf.String() }
@@ -108,10 +114,7 @@ func (s *Server) runHostCommand(ctx context.Context, command, workdir, stdin str
 		timeout = 30 * time.Minute
 	}
 	if timeoutSeconds > 0 {
-		requested := time.Duration(timeoutSeconds) * time.Second
-		if requested < timeout {
-			timeout = requested
-		}
+		timeout = time.Duration(timeoutSeconds) * time.Second
 	}
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

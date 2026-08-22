@@ -2,23 +2,23 @@
 
 [![test](https://github.com/xiaoqianran/mygpt-cf-tunnel/actions/workflows/test.yml/badge.svg)](https://github.com/xiaoqianran/mygpt-cf-tunnel/actions/workflows/test.yml)
 
-> 把 Custom GPT 连接到一台真实 VPS 的 **root shell**。对 GPT 只暴露一个 `runCommand`，服务器缺什么能力就安装什么，再继续完成工作流。
+> 把 Custom GPT 连接到一台真实 VPS 的 **root shell**。对 GPT 暴露同一个 root shell 的同步与异步生命周期：短任务用 `runCommand`，长任务用异步 Job；服务器缺什么能力就安装什么，再继续完成工作流。
 
 **仓库主页：** [README.md](./README.md) · **GPT Builder 指令：** [GPT_INSTRUCTIONS.md](./GPT_INSTRUCTIONS.md)
 
 ## 一句话理解
 
-这个项目不是“给 GPT 准备很多专用 API”，而是只提供一个足够底层的执行原语：
+这个项目不是“给 GPT 准备很多专用 API”，而是只提供一个足够底层的执行原语，并为它提供同步与异步生命周期：
 
 ```text
-runCommand = 远程 VPS 上的 root /bin/bash -lc
+runCommand / async job = 远程 VPS 上的 root /bin/bash -lc
 ```
 
 因此能力不由 OpenAPI 中列出的工具决定，而由这台 VPS 最终能够安装、运行和访问的东西决定。
 
 `git`、`gh`、Python、Node、Go、Docker、Modal、Kaggle、数据库客户端、云平台 CLI、系统包管理器等都只是可能用到的工具，**不是能力白名单，也不是功能边界**。
 
-## 为什么只保留一个 Action
+## 为什么只保留一个执行原语
 
 传统做法往往为每种任务设计一个接口：
 
@@ -48,7 +48,8 @@ Cloudflare Tunnel
 127.0.0.1:8787
 Universal VPS Root Shell Agent
     │
-    └── POST /v1/command/run
+    ├── POST /v1/command/run
+    └── POST /v1/command/start → job id
             │
             └── /bin/bash -lc <command>  (root)
                     │
@@ -124,10 +125,13 @@ curl -s http://127.0.0.1:8787/openapi.json | jq '.paths'
 systemctl status mygpt-github-agent
 ```
 
-正常情况下 OpenAPI 只应该看到：
+正常情况下 OpenAPI 应看到：
 
 ```text
 /v1/command/run
+/v1/command/start
+/v1/command/jobs/{id}
+/v1/command/jobs/{id}/cancel
 ```
 
 ### 3. 配置 Cloudflare Tunnel
@@ -170,7 +174,7 @@ https://agent.example.com/openapi.json
 
 推荐的 GPT 描述：
 
-> 连接远程 VPS 的 root shell。通过唯一的 `runCommand` 使用或自主安装所需软件，组合命令、程序、服务与网络能力，并完成服务器能够执行的任意工作流。
+> 连接远程 VPS 的 root shell。通过 `runCommand`（短任务）或异步 Job（长任务）使用或自主安装所需软件，组合命令、程序、服务与网络能力，并完成服务器能够执行的任意工作流。
 
 完整 Instructions 直接使用：
 
@@ -334,7 +338,7 @@ stdin
 - 配置片段；
 - CLI 的非交互输入。
 
-超长任务可以由 `systemd-run`、后台服务、队列、云平台 Job 等机制接管，再通过后续 `runCommand` 查询状态。
+长任务应优先使用 `startCommand`。它立即返回 job id，不让 Cloudflare HTTP 请求等待命令结束；随后使用 `getCommandJob` 查询，必要时用 `cancelCommandJob` 取消。异步 Job 不绑定原始 HTTP request context，因此代理连接结束不会自动终止任务。已完成 Job 在内存中保留 24 小时；Agent 重启后会清空。更复杂的持久任务仍可交给 `systemd-run`、队列或云平台 Job。
 
 ## Agent 可以升级自己
 
@@ -378,7 +382,7 @@ Custom GPT Builder 对 schema 结构和 description 长度有额外约束，所�
 
 - `components.schemas` 必须显式为 JSON object；
 - OpenAPI description 保持在 Builder 可接受长度内；
-- Action 面只包含 `runCommand`；
+- Action 面只包含同一个 shell 执行原语的同步与异步生命周期；
 - `x-openai-isConsequential` 明确为 `false`，避免因 Action consequential 标记触发逐次确认。
 
 ## CI
@@ -503,3 +507,7 @@ curl http://127.0.0.1:8787/health
 **操作系统和 CLI 生态本身就是能力层。**
 
 这也是为什么项目最终只需要一个 `runCommand`。
+
+## Cloudflare 524 超时事实
+
+Cloudflare 当前官方文档与本地下载快照见 [`CLOUDFLARE_TIMEOUTS.md`](./CLOUDFLARE_TIMEOUTS.md)。默认 Proxy Read Timeout 当前为 **125 秒**，不要使用旧的 100 秒记忆。
