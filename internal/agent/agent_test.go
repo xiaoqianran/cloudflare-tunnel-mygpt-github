@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -255,7 +256,11 @@ func TestAsyncCommandHTTPFlow(t *testing.T) {
 	s := NewServer(Config{APIToken: "test-token", CommandTimeout: time.Second, MaxCommandOutputChars: 20000})
 	h := s.Handler()
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/command/start", strings.NewReader(`{"command":"printf done"}`))
+	body, err := json.Marshal(commandInput{Command: "printf done", Workdir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/command/start", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer test-token")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -275,8 +280,15 @@ func TestAsyncCommandHTTPFlow(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer test-token")
 		rec = httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
-		if strings.Contains(rec.Body.String(), `"status":"completed"`) {
+		var job commandJob
+		if err := json.Unmarshal(rec.Body.Bytes(), &job); err != nil {
+			t.Fatalf("invalid job response: %s", rec.Body.String())
+		}
+		switch job.Status {
+		case "completed":
 			return
+		case "failed", "cancelled", "timed_out":
+			t.Fatalf("job ended as %s: %s", job.Status, rec.Body.String())
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
